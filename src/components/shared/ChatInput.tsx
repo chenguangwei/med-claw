@@ -781,12 +781,12 @@ export function ChatInput({
 
   const removeSelectedSkill = useCallback(() => {
     setSelectedSkill(null);
-    setValue('/');
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
       if (textareaRef.current) {
-        textareaRef.current.selectionStart = 1;
-        textareaRef.current.selectionEnd = 1;
+        const cursorPosition = textareaRef.current.value.length;
+        textareaRef.current.selectionStart = cursorPosition;
+        textareaRef.current.selectionEnd = cursorPosition;
       }
     });
   }, []);

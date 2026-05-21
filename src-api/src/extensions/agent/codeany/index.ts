@@ -104,6 +104,15 @@ function parseSlashSkillInvocation(
   };
 }
 
+interface SlashSkillResolution {
+  prompt: string;
+  invocation?: {
+    name: string;
+    args: string;
+    promptLength: number;
+  };
+}
+
 function getSessionWorkDir(
   workDir: string = DEFAULT_WORK_DIR,
   prompt?: string,
@@ -293,16 +302,16 @@ export class CodeAnyAgent extends BaseAgent {
     prompt: string,
     sessionCwd: string,
     options?: AgentOptions
-  ): Promise<string> {
+  ): Promise<SlashSkillResolution> {
     const invocation = parseSlashSkillInvocation(prompt);
     if (!invocation || options?.skillsConfig?.enabled === false) {
-      return prompt;
+      return { prompt };
     }
 
     await syncSdkSkills(options?.skillsConfig);
     const skill = getSkill(invocation.name);
     if (!skill || (skill.isEnabled && !skill.isEnabled())) {
-      return prompt;
+      return { prompt };
     }
 
     const blocks = await skill.getPrompt(invocation.args, {
@@ -320,11 +329,12 @@ export class CodeAnyAgent extends BaseAgent {
       .join('\n\n');
 
     if (!skillPrompt.trim()) {
-      return prompt;
+      return { prompt };
     }
 
-    return [
-      `The user explicitly invoked /${invocation.name}. Apply this skill before answering.`,
+    const resolvedPrompt = [
+      `The user explicitly invoked /${invocation.name}. This is an active skill invocation, not a question about the skill.`,
+      'Follow the SKILL.md workflow below as executable instructions for this request. Do not summarize the skill unless the user explicitly asks for a summary.',
       invocation.args.trim()
         ? `Invocation arguments:\n${invocation.args.trim()}`
         : '',
@@ -332,6 +342,15 @@ export class CodeAnyAgent extends BaseAgent {
     ]
       .filter(Boolean)
       .join('\n\n');
+
+    return {
+      prompt: resolvedPrompt,
+      invocation: {
+        name: invocation.name,
+        args: invocation.args,
+        promptLength: skillPrompt.length,
+      },
+    };
   }
 
   private estimateTokenCount(text: string): number {
@@ -533,11 +552,12 @@ User's request (answer this AFTER reading the images):
       }
     }
 
-    const effectivePrompt = await this.resolveSlashSkillPrompt(
+    const slashSkillResolution = await this.resolveSlashSkillPrompt(
       prompt,
       sessionCwd,
       options
     );
+    const effectivePrompt = slashSkillResolution.prompt;
     const conversationContext = this.formatConversationHistory(
       options?.conversation
     );
@@ -589,6 +609,27 @@ User's request (answer this AFTER reading the images):
     try {
       const sdkAgent = createSdkAgent(sdkOpts);
       try {
+        if (slashSkillResolution.invocation) {
+          const toolId = `explicit-skill-${session.id}`;
+          sentToolIds.add(toolId);
+          yield {
+            type: 'tool_use',
+            id: toolId,
+            name: 'Skill',
+            input: {
+              skill: slashSkillResolution.invocation.name,
+              arguments: slashSkillResolution.invocation.args,
+              explicit: true,
+            },
+          };
+          yield {
+            type: 'tool_result',
+            toolUseId: toolId,
+            output: `Loaded /${slashSkillResolution.invocation.name} instructions (${slashSkillResolution.invocation.promptLength} chars) and applied them to this request.`,
+            isError: false,
+          };
+        }
+
         const skillsSystemPrompt = await this.buildSkillsSystemPrompt(options);
         const queryOverrides: Partial<SdkAgentOptions> | undefined =
           skillsSystemPrompt

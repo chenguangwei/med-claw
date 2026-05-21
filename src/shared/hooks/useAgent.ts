@@ -1937,6 +1937,7 @@ export function useAgent(): UseAgentReturn {
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
+          !isSlashCommand(prompt) &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(prompt)));
 
@@ -2635,6 +2636,7 @@ export function useAgent(): UseAgentReturn {
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
+          !isSlashCommand(reply) &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(reply)));
 

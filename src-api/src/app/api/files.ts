@@ -12,6 +12,7 @@ import { promisify } from 'util';
 import { Hono } from 'hono';
 
 import { getAllSkillsDirs, getHomeDir } from '@/config/constants';
+import { importGitHubSkill } from '@/shared/skills/importer';
 
 const execAsync = promisify(exec);
 
@@ -350,6 +351,54 @@ files.get('/skills-dir', async (c) => {
     exists: !!firstExisting,
     directories: results,
   });
+});
+
+/**
+ * Import a GitHub skill into a configured skills directory.
+ * POST /files/import-skill
+ * Body: { url: string, targetDir: string, skillName?: string }
+ */
+files.post('/import-skill', async (c) => {
+  try {
+    const body = await c.req.json<{
+      url: string;
+      targetDir: string;
+      skillName?: string;
+    }>();
+
+    if (!body.url) {
+      return c.json({ success: false, error: 'URL is required' }, 400);
+    }
+    if (!body.targetDir) {
+      return c.json({ success: false, error: 'Target directory is required' }, 400);
+    }
+
+    const homedir = path.resolve(getHomeDir());
+    const targetDir = path.resolve(body.targetDir);
+    const relativeTarget = path.relative(homedir, targetDir);
+
+    if (relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) {
+      return c.json(
+        {
+          success: false,
+          error: 'Access denied: target must be within home directory',
+        },
+        403
+      );
+    }
+
+    const result = await importGitHubSkill({
+      url: body.url,
+      targetDir,
+      skillName: body.skillName,
+    });
+
+    return c.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message.startsWith('TARGET_EXISTS|') ? 409 : 500;
+    return c.json({ success: false, error: message }, status);
+  }
 });
 
 /**

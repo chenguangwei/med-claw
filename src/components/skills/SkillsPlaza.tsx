@@ -42,9 +42,23 @@ interface PlazaSkill {
   installed: boolean;
   featured?: boolean;
   path?: string;
+  sourceUrl?: string;
   icon: React.ComponentType<{ className?: string }>;
   accent: string;
 }
+
+interface HubSkill {
+  slug: string;
+  name: string;
+  summary?: string;
+  source_url?: string;
+  stars?: number;
+  category?: string;
+  tags?: string[];
+}
+
+const DEFAULT_SKILLS_HUB_URL =
+  'https://raw.githubusercontent.com/qufei1993/skills-hub/main/featured-skills.json';
 
 const categoryKeys = [
   '全部',
@@ -261,16 +275,56 @@ function skillToPlazaSkill(skill: SkillInfo, index: number): PlazaSkill {
   };
 }
 
+function hubSkillToPlazaSkill(skill: HubSkill, index: number): PlazaSkill {
+  const category = inferCategory(skill.name, skill.summary || '');
+  const iconMap: Record<string, PlazaSkill['icon']> = {
+    金融助手: ReceiptText,
+    办公协作: ClipboardList,
+    内容创作: Flame,
+    开发工具: Code2,
+    数据处理: Globe2,
+    效率工具: Sparkles,
+    学术研究: ClipboardList,
+  };
+  const accentMap = [
+    'from-sky-100 to-cyan-50 text-sky-600 border-sky-100',
+    'from-violet-100 to-indigo-50 text-violet-600 border-violet-100',
+    'from-emerald-100 to-teal-50 text-emerald-600 border-emerald-100',
+    'from-orange-100 to-amber-50 text-orange-500 border-orange-100',
+  ];
+
+  return {
+    id: `hub-${skill.slug || skill.name}`,
+    name: skill.name,
+    description: skill.summary || '来自外部 Skills Hub 的技能。',
+    category,
+    tags: skill.tags?.slice(0, 4) || [category, 'Skills Hub'],
+    source: 'Skills Hub',
+    installs: skill.stars ? `${skill.stars.toLocaleString()} stars` : '可引入',
+    installed: false,
+    sourceUrl: skill.source_url,
+    icon: iconMap[category] || Sparkles,
+    accent: accentMap[index % accentMap.length],
+  };
+}
+
 export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
   const { t } = useLanguage();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [hubSkills, setHubSkills] = useState<HubSkill[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hubLoading, setHubLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<PlazaTab>('team');
   const [activeCategory, setActiveCategory] = useState('全部');
   const [searchQuery, setSearchQuery] = useState('');
   const [skillsDirs, setSkillsDirs] = useState({ user: '', app: '' });
   const [defaultSkillsPath, setDefaultSkillsPath] = useState('');
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [githubUrl, setGithubUrl] = useState('');
+  const [hubUrl, setHubUrl] = useState(DEFAULT_SKILLS_HUB_URL);
+  const [importingSkillId, setImportingSkillId] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
 
   useEffect(() => {
     getClaudeSkillsDir().then(setDefaultSkillsPath);
@@ -354,9 +408,78 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
     loadSkills();
   }, [loadSkills]);
 
+  const loadHubSkills = useCallback(async () => {
+    if (!hubUrl.trim()) return;
+    setHubLoading(true);
+    setImportStatus(null);
+    try {
+      const response = await fetch(hubUrl.trim());
+      if (!response.ok) {
+        throw new Error(`Hub request failed: ${response.status}`);
+      }
+      const data = await response.json();
+      const remoteSkills = Array.isArray(data.skills) ? data.skills : [];
+      setHubSkills(remoteSkills.slice(0, 48));
+    } catch (error) {
+      console.error('[SkillsPlaza] Failed to load skills hub:', error);
+      setImportStatus('加载外部 Skills Hub 失败，请检查地址。');
+    } finally {
+      setHubLoading(false);
+    }
+  }, [hubUrl]);
+
+  useEffect(() => {
+    loadHubSkills();
+  }, [loadHubSkills]);
+
+  const importSkill = useCallback(
+    async (sourceUrl: string, skillName?: string, skillId?: string) => {
+      const targetDir = skillsDirs.user || defaultSkillsPath || skillsDirs.app;
+      if (!targetDir) {
+        setImportStatus('未找到可用的 Skills 目录。');
+        return;
+      }
+
+      setImportingSkillId(skillId || sourceUrl);
+      setImportStatus(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/files/import-skill`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: sourceUrl,
+            targetDir,
+            skillName,
+          }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+          if (String(data.error || '').startsWith('TARGET_EXISTS|')) {
+            setImportStatus('该技能已存在，无需重复引入。');
+          } else {
+            setImportStatus(data.error || '引入失败。');
+          }
+          return;
+        }
+
+        setImportStatus(`已引入 ${data.skillName}`);
+        setGithubUrl('');
+        setShowImportDialog(false);
+        await loadSkills();
+      } catch (error) {
+        console.error('[SkillsPlaza] Failed to import skill:', error);
+        setImportStatus('引入失败，请确认 GitHub 地址可访问。');
+      } finally {
+        setImportingSkillId(null);
+      }
+    },
+    [defaultSkillsPath, loadSkills, skillsDirs.app, skillsDirs.user]
+  );
+
   const plazaSkills = useMemo(() => {
     const localSkills = skills.map(skillToPlazaSkill);
-    const merged = [...localSkills, ...fallbackSkills];
+    const remoteSkills = hubSkills.map(hubSkillToPlazaSkill);
+    const merged = [...localSkills, ...fallbackSkills, ...remoteSkills];
     const seen = new Set<string>();
     return merged.filter((skill) => {
       const key = skill.name.toLowerCase();
@@ -364,7 +487,7 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
       seen.add(key);
       return true;
     });
-  }, [skills]);
+  }, [hubSkills, skills]);
 
   const visibleSkills = plazaSkills.filter((skill) => {
     if (activeTab === 'mine' && !skill.installed) return false;
@@ -398,6 +521,12 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
     setShowAddMenu(false);
   };
 
+  const handleOpenImportDialog = () => {
+    setShowAddMenu(false);
+    setShowImportDialog(true);
+    setImportStatus(null);
+  };
+
   const renderSkillCard = (
     skill: PlazaSkill,
     variant: SkillMarketCardVariant
@@ -406,9 +535,20 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
       key={skill.id}
       skill={skill}
       variant={variant}
-      onPrimaryAction={() =>
-        openFolderInSystem(skill.path || skillsDirs.user || defaultSkillsPath)
-      }
+      importing={importingSkillId === skill.id}
+      onPrimaryAction={() => {
+        if (skill.installed) {
+          openFolderInSystem(
+            skill.path || skillsDirs.user || defaultSkillsPath
+          );
+          return;
+        }
+        if (skill.sourceUrl) {
+          importSkill(skill.sourceUrl, skill.name, skill.id);
+          return;
+        }
+        setImportStatus('这个精选技能暂未配置可下载来源。');
+      }}
     />
   );
 
@@ -464,6 +604,13 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
                     onClick={() => setShowAddMenu(false)}
                   />
                   <div className="absolute top-full right-0 z-30 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 shadow-xl">
+                    <button
+                      onClick={handleOpenImportDialog}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <Download className="size-4 text-slate-500" />从 GitHub
+                      引入
+                    </button>
                     <button
                       onClick={handleAddSkill}
                       className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50"
@@ -523,27 +670,62 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
           </button>
         </div>
 
+        {importStatus && (
+          <div className="mb-6 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-700">
+            {importStatus}
+          </div>
+        )}
+
         {activeTab === 'manage' && (
-          <div className="mb-6 grid grid-cols-2 gap-4">
-            <ManageSwitchCard
-              title="启用 Skills"
-              description="在智能体对话时加载已启用的技能。"
-              checked={settings.skillsEnabled !== false}
-              onChange={(checked) =>
-                onSettingsChange({ ...settings, skillsEnabled: checked })
-              }
-            />
-            <ManageSwitchCard
-              title="加载个人目录"
-              description={skillsDirs.user || defaultSkillsPath}
-              checked={settings.skillsUserDirEnabled !== false}
-              onChange={(checked) =>
-                onSettingsChange({
-                  ...settings,
-                  skillsUserDirEnabled: checked,
-                })
-              }
-            />
+          <div className="mb-6 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <ManageSwitchCard
+                title="启用 Skills"
+                description="在智能体对话时加载已启用的技能。"
+                checked={settings.skillsEnabled !== false}
+                onChange={(checked) =>
+                  onSettingsChange({ ...settings, skillsEnabled: checked })
+                }
+              />
+              <ManageSwitchCard
+                title="加载个人目录"
+                description={skillsDirs.user || defaultSkillsPath}
+                checked={settings.skillsUserDirEnabled !== false}
+                onChange={(checked) =>
+                  onSettingsChange({
+                    ...settings,
+                    skillsUserDirEnabled: checked,
+                  })
+                }
+              />
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-base font-semibold text-slate-950">
+                    外部 Skills Hub
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    支持 Skills Hub 风格的
+                    featured-skills.json，加载后可直接引入每个 source_url。
+                  </p>
+                  <input
+                    value={hubUrl}
+                    onChange={(event) => setHubUrl(event.target.value)}
+                    className="mt-4 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 transition outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                  />
+                </div>
+                <button
+                  onClick={loadHubSkills}
+                  disabled={hubLoading}
+                  className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {hubLoading && <Loader2 className="size-4 animate-spin" />}
+                  加载 Hub
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -581,6 +763,56 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
           </div>
         )}
       </div>
+
+      {showImportDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">
+                  从 GitHub 引入 Skill
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  支持单个 skill 目录链接，例如
+                  https://github.com/anthropics/skills/tree/main/skills/pdf。
+                </p>
+              </div>
+              <button
+                onClick={() => setShowImportDialog(false)}
+                className="rounded-full px-2 py-1 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+              >
+                关闭
+              </button>
+            </div>
+
+            <input
+              value={githubUrl}
+              onChange={(event) => setGithubUrl(event.target.value)}
+              placeholder="https://github.com/owner/repo/tree/main/skills/name"
+              className="mt-5 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 transition outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+            />
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowImportDialog(false)}
+                className="h-11 rounded-xl border border-slate-200 px-5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => importSkill(githubUrl)}
+                disabled={!githubUrl.trim() || importingSkillId === githubUrl}
+                className="flex h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {importingSkillId === githubUrl && (
+                  <Loader2 className="size-4 animate-spin" />
+                )}
+                引入
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -613,10 +845,12 @@ function SkillMarketCard({
   skill,
   variant,
   onPrimaryAction,
+  importing,
 }: {
   skill: PlazaSkill;
   variant: SkillMarketCardVariant;
   onPrimaryAction: () => void;
+  importing?: boolean;
 }) {
   const Icon = skill.icon;
   const featured = variant === 'featured';
@@ -655,7 +889,11 @@ function SkillMarketCard({
 
         <FeaturedSkillPreview />
 
-        <SkillCardFooter skill={skill} onPrimaryAction={onPrimaryAction} />
+        <SkillCardFooter
+          skill={skill}
+          onPrimaryAction={onPrimaryAction}
+          importing={importing}
+        />
       </article>
     );
   }
@@ -711,6 +949,7 @@ function SkillMarketCard({
           skill={skill}
           onPrimaryAction={onPrimaryAction}
           dense={wide}
+          importing={importing}
         />
       </article>
     );
@@ -757,7 +996,11 @@ function SkillMarketCard({
 
       <SkillTags tags={skill.tags} limit={3} className="mt-5" />
 
-      <SkillCardFooter skill={skill} onPrimaryAction={onPrimaryAction} />
+      <SkillCardFooter
+        skill={skill}
+        onPrimaryAction={onPrimaryAction}
+        importing={importing}
+      />
     </article>
   );
 }
@@ -819,10 +1062,12 @@ function SkillCardFooter({
   skill,
   onPrimaryAction,
   dense,
+  importing,
 }: {
   skill: PlazaSkill;
   onPrimaryAction: () => void;
   dense?: boolean;
+  importing?: boolean;
 }) {
   return (
     <div
@@ -841,9 +1086,10 @@ function SkillCardFooter({
       </div>
       <button
         onClick={onPrimaryAction}
+        disabled={importing}
         className="h-10 shrink-0 rounded-xl border border-orange-500 px-6 text-sm font-semibold text-orange-600 transition hover:bg-orange-50"
       >
-        {skill.installed ? '管理' : '安装'}
+        {importing ? '引入中' : skill.installed ? '已引入' : '引入'}
       </button>
     </div>
   );
