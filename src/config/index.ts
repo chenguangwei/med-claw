@@ -27,7 +27,7 @@ export const API_BASE_URL = `http://localhost:${API_PORT}`;
 /**
  * App name
  */
-export const APP_NAME = 'WorkAny';
+export const APP_NAME = 'U2Claw';
 
 /**
  * App identifier (must match tauri.conf.json)

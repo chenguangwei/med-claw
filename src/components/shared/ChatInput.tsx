@@ -13,7 +13,11 @@ import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import {
   ArrowUp,
+  BadgeDollarSign,
+  BriefcaseBusiness,
+  CalendarCheck2,
   Cpu,
+  FileCheck2,
   FileText,
   MessageCircle,
   Paperclip,
@@ -60,6 +64,40 @@ interface SkillOption {
   path: string;
   enabled: boolean;
 }
+
+interface CapabilityOption {
+  id: string;
+  label: string;
+  instruction: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+const capabilityOptions: CapabilityOption[] = [
+  {
+    id: 'sales',
+    label: '销售助手',
+    instruction: '销售助手',
+    icon: BadgeDollarSign,
+  },
+  {
+    id: 'meeting',
+    label: '会议助手',
+    instruction: '会议助手',
+    icon: CalendarCheck2,
+  },
+  {
+    id: 'office',
+    label: '办公助手',
+    instruction: '办公助手',
+    icon: BriefcaseBusiness,
+  },
+  {
+    id: 'document-review',
+    label: '文档审核',
+    instruction: '文档审核',
+    icon: FileCheck2,
+  },
+];
 
 export interface ChatInputProps {
   /** Placeholder text */
@@ -209,6 +247,9 @@ export function ChatInput({
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<SkillOption | null>(null);
+  const [selectedCapabilityIds, setSelectedCapabilityIds] = useState<string[]>(
+    []
+  );
   const [highlightedSkillIndex, setHighlightedSkillIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -232,6 +273,11 @@ export function ChatInput({
       );
     })
     .slice(0, 8);
+  const selectedCapabilities = capabilityOptions.filter((capability) =>
+    selectedCapabilityIds.includes(capability.id)
+  );
+  const visibleCapabilities =
+    selectedCapabilities.length > 0 ? selectedCapabilities : capabilityOptions;
 
   // Sync external value into the input
   useEffect(() => {
@@ -688,21 +734,41 @@ export function ChatInput({
 
   const handleSubmit = async () => {
     if (
-      (value.trim() || selectedSkill || attachments.length > 0) &&
+      (value.trim() ||
+        selectedSkill ||
+        selectedCapabilityIds.length > 0 ||
+        attachments.length > 0) &&
       !isRunning &&
       !disabled
     ) {
+      const trimmedValue = value.trim();
+      const capabilityInstruction =
+        selectedCapabilities.length > 0
+          ? `使用以下能力：${selectedCapabilities.map((capability) => capability.instruction).join('、')}。`
+          : '';
       const text = selectedSkill
-        ? `/${selectedSkill.name}${value.trim() ? ` ${value.trim()}` : ''}`
-        : value.trim();
+        ? `/${selectedSkill.name}${capabilityInstruction ? ` ${capabilityInstruction}` : ''}${trimmedValue ? ` ${trimmedValue}` : ''}`
+        : [capabilityInstruction, trimmedValue].filter(Boolean).join('\n');
       const messageAttachments = await convertToMessageAttachments();
 
       setValue('');
       setAttachments([]);
       setSelectedSkill(null);
+      setSelectedCapabilityIds([]);
       await onSubmit(text, messageAttachments, chatMode);
     }
   };
+
+  const selectCapability = useCallback((capabilityId: string) => {
+    setSelectedCapabilityIds([capabilityId]);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }, []);
+
+  const removeSelectedCapability = useCallback(() => {
+    setSelectedCapabilityIds([]);
+  }, []);
 
   const selectSkill = useCallback((skill: SkillOption) => {
     setSelectedSkill(skill);
@@ -789,7 +855,11 @@ export function ChatInput({
 
   const isHome = variant === 'home';
   const canSubmit =
-    (value.trim() || selectedSkill || attachments.length > 0) && !disabled;
+    (value.trim() ||
+      selectedSkill ||
+      selectedCapabilityIds.length > 0 ||
+      attachments.length > 0) &&
+    !disabled;
 
   // Auto-resize textarea based on content
   useEffect(() => {
@@ -820,9 +890,9 @@ export function ChatInput({
       className={cn(
         'relative w-full transition-colors',
         isHome
-          ? 'border-border/50 bg-background rounded-2xl border p-4 shadow-lg'
-          : 'border-border/60 bg-background rounded-xl border p-3 shadow-sm',
-        isDragging && 'border-primary/50 bg-primary/5 border-2',
+          ? 'rounded-2xl border border-transparent bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(255,252,248,0.94))_padding-box,linear-gradient(135deg,rgba(249,115,22,0.28),rgba(124,58,237,0.16),rgba(6,182,212,0.2))_border-box] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.09),0_1px_0_rgba(255,255,255,0.9)_inset] focus-within:shadow-[0_20px_48px_rgba(249,115,22,0.12),0_0_0_3px_rgba(249,115,22,0.08)]'
+          : 'rounded-xl border border-transparent bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(255,253,250,0.94))_padding-box,linear-gradient(135deg,rgba(249,115,22,0.18),rgba(124,58,237,0.1),rgba(226,232,240,0.9))_border-box] p-3 shadow-sm',
+        isDragging && 'bg-primary/5 border-primary/50 border-2',
         className
       )}
     >
@@ -981,7 +1051,7 @@ export function ChatInput({
         )}
       >
         {/* Add Button + Category Tag */}
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger
               disabled={isRunning || disabled}
@@ -1060,6 +1130,51 @@ export function ChatInput({
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Capability chips */}
+          {isHome &&
+            visibleCapabilities.map((capability) => {
+              const Icon = capability.icon;
+              const isSelected = selectedCapabilityIds.includes(capability.id);
+
+              if (isSelected) {
+                return (
+                  <button
+                    key={capability.id}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={removeSelectedCapability}
+                    disabled={isRunning || disabled}
+                    aria-label={`删除${capability.label}`}
+                    className="border-primary/30 bg-primary/10 text-primary hover:bg-primary/15 inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium shadow-[0_6px_18px_rgba(249,115,22,0.12)] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Icon className="size-3.5 shrink-0" />
+                    <span>{capability.label}</span>
+                    <span
+                      aria-hidden="true"
+                      className="text-primary/60 -mr-1 rounded-full p-0.5"
+                    >
+                      <X className="size-3.5" />
+                    </span>
+                  </button>
+                );
+              }
+
+              return (
+                <button
+                  key={capability.id}
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectCapability(capability.id)}
+                  disabled={isRunning || disabled}
+                  aria-label={`选择${capability.label}`}
+                  className="border-border bg-background text-muted-foreground hover:border-primary/35 hover:bg-primary/10 hover:text-primary inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  <span>{capability.label}</span>
+                </button>
+              );
+            })}
 
           {/* Category Tag */}
           {categoryTag && (

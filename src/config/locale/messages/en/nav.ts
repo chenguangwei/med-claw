@@ -1,4 +1,13 @@
 export default {
+  taskAssistant: 'Task Assistant',
+  skillsPlaza: 'Skills Plaza',
+  workspace: 'Workspace',
+  logManagement: 'Scheduled Tasks',
+  mcpPlaza: 'AI Ability Plaza',
+  myAssistant: 'My Assistant',
+  primaryAssistant: 'Primary Assistant',
+  createAssistant: 'Create Assistant',
+  taskRecords: 'Task Records',
   newTask: 'New task',
   allTasks: 'All tasks',
   noTasksYet: 'No tasks yet',

@@ -1,4 +1,13 @@
 export default {
+  taskAssistant: '任务助手',
+  skillsPlaza: '技能广场',
+  workspace: '工作空间',
+  logManagement: '定时任务',
+  mcpPlaza: 'AI 能力广场',
+  myAssistant: '我的助手',
+  primaryAssistant: '主助手',
+  createAssistant: '创建助手',
+  taskRecords: '任务记录',
   newTask: '新建任务',
   allTasks: '所有任务',
   noTasksYet: '暂无任务',
