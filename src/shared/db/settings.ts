@@ -244,7 +244,7 @@ export const defaultProviders: AIProvider[] = [
     baseUrl: 'https://openrouter.ai/api',
     enabled: true,
     models: ['anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.5'],
-    apiType: 'openai-completions',
+    apiType: 'anthropic-messages',
     icon: 'O',
     apiKeyUrl: 'https://openrouter.ai/keys',
     canDelete: true,
@@ -615,6 +615,8 @@ export async function saveSettingsAsync(settings: Settings): Promise<void> {
 
   const database = await getDatabase();
 
+  console.log('[Settings] saveSettingsAsync - database:', database ? 'connected' : 'null');
+
   if (database) {
     try {
       // Save each setting key individually using REPLACE
@@ -626,9 +628,12 @@ export async function saveSettingsAsync(settings: Settings): Promise<void> {
           [key, value]
         );
       }
+      console.log('[Settings] saveSettingsAsync - saved successfully to database, defaultProvider:', settings.defaultProvider);
     } catch (error) {
       console.error('[Settings] Failed to save to database:', error);
     }
+  } else {
+    console.warn('[Settings] saveSettingsAsync - database not available, only saving to cache/localStorage');
   }
 
   // Also save to localStorage as fallback

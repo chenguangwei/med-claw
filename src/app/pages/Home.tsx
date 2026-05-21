@@ -18,7 +18,7 @@ import { useLanguage } from '@/shared/providers/language-provider';
 import { ArrowUpRight, Cog, FileText, FolderOpen } from 'lucide-react';
 
 import { LeftSidebar, SidebarProvider } from '@/components/layout';
-import { ChatInput, type CategoryTag, type ChatMode } from '@/components/shared/ChatInput';
+import { ChatInput, type ChatMode } from '@/components/shared/ChatInput';
 
 type CategoryKey = 'organizeFiles' | 'generateDocs' | 'automateTasks';
 
@@ -148,9 +148,7 @@ function HomeContent() {
   };
 
   const categories = t.home.examplePrompts.categories;
-  const activeCategoryData = activeCategory
-    ? categories[activeCategory]
-    : null;
+  const activeCategoryData = activeCategory ? categories[activeCategory] : null;
 
   return (
     <div className="bg-sidebar flex h-screen overflow-hidden">

@@ -18,27 +18,11 @@ import {
 
 import { Switch } from '../components/Switch';
 import {
-  customProviderModels,
   defaultProviderIds,
   providerApiKeyUrls,
-  providerDefaultModels,
   providerIcons,
 } from '../constants';
 import type { AIProvider, SettingsTabProps } from '../types';
-
-// Get suggested models for a provider
-function getSuggestedModels(provider: AIProvider): string[] {
-  if (providerDefaultModels[provider.id]) {
-    return providerDefaultModels[provider.id];
-  }
-  const providerNameLower = provider.name.toLowerCase();
-  for (const [key, models] of Object.entries(customProviderModels)) {
-    if (providerNameLower.includes(key.toLowerCase())) {
-      return models;
-    }
-  }
-  return providerDefaultModels.default || [];
-}
 
 // Helper function to open external URLs
 const openExternalUrl = async (url: string) => {
@@ -153,7 +137,9 @@ export function ModelSettings({
     baseUrl: '',
     apiKey: '',
     models: '',
-    apiType: 'openai-completions' as 'anthropic-messages' | 'openai-completions',
+    apiType: 'openai-completions' as
+      | 'anthropic-messages'
+      | 'openai-completions',
   });
   const [showApiKey, setShowApiKey] = useState(false);
   const [newModelName, setNewModelName] = useState('');
@@ -335,7 +321,14 @@ export function ModelSettings({
       }
       return updated;
     });
-    onSettingsChange({ ...settings, providers: newProviders });
+    const newSettings = { ...settings, providers: newProviders };
+    if (
+      settings.defaultProvider === providerId &&
+      typeof updates.defaultModel === 'string'
+    ) {
+      newSettings.defaultModel = updates.defaultModel;
+    }
+    onSettingsChange(newSettings);
   };
 
   const handleAddProvider = () => {
@@ -364,7 +357,13 @@ export function ModelSettings({
       providers: [...settings.providers, provider],
     });
 
-    setNewProvider({ name: '', baseUrl: '', apiKey: '', models: '', apiType: 'openai-completions' });
+    setNewProvider({
+      name: '',
+      baseUrl: '',
+      apiKey: '',
+      models: '',
+      apiType: 'openai-completions',
+    });
     setShowAddProvider(false);
     setEditingProvider(id);
   };
@@ -488,7 +487,8 @@ export function ModelSettings({
                 </p>
                 <select
                   value={
-                    settings.defaultProvider && settings.defaultProvider !== 'default'
+                    settings.defaultProvider &&
+                    settings.defaultProvider !== 'default'
                       ? `${settings.defaultProvider}:${settings.defaultModel}`
                       : availableModels.length > 0
                         ? `${availableModels[0].provider.id}:${availableModels[0].model}`
@@ -505,7 +505,9 @@ export function ModelSettings({
                   className="border-input bg-background text-foreground focus:ring-ring h-10 w-full max-w-md rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
                 >
                   {availableModels.length === 0 && (
-                    <option value="">{t.settings.noModelsAvailable || 'No models available'}</option>
+                    <option value="">
+                      {t.settings.noModelsAvailable || 'No models available'}
+                    </option>
                   )}
                   {availableModels.map(({ provider, model }) => (
                     <option
@@ -624,13 +626,19 @@ export function ModelSettings({
                       onChange={(e) =>
                         setNewProvider({
                           ...newProvider,
-                          apiType: e.target.value as 'anthropic-messages' | 'openai-completions',
+                          apiType: e.target.value as
+                            | 'anthropic-messages'
+                            | 'openai-completions',
                         })
                       }
                       className="border-input bg-background text-foreground focus:ring-ring h-10 w-full appearance-none rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
                     >
-                      <option value="openai-completions">OpenAI Completions</option>
-                      <option value="anthropic-messages">Anthropic Messages</option>
+                      <option value="openai-completions">
+                        OpenAI Completions
+                      </option>
+                      <option value="anthropic-messages">
+                        Anthropic Messages
+                      </option>
                     </select>
                   </div>
                 </div>
@@ -797,13 +805,19 @@ export function ModelSettings({
                         value={selectedProvider.apiType || 'openai-completions'}
                         onChange={(e) =>
                           handleProviderUpdate(selectedProvider.id, {
-                            apiType: e.target.value as 'anthropic-messages' | 'openai-completions',
+                            apiType: e.target.value as
+                              | 'anthropic-messages'
+                              | 'openai-completions',
                           })
                         }
                         className="border-input bg-background text-foreground focus:ring-ring h-10 w-full appearance-none rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
                       >
-                        <option value="openai-completions">OpenAI Completions</option>
-                        <option value="anthropic-messages">Anthropic Messages</option>
+                        <option value="openai-completions">
+                          OpenAI Completions
+                        </option>
+                        <option value="anthropic-messages">
+                          Anthropic Messages
+                        </option>
                       </select>
                     </div>
 

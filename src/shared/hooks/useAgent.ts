@@ -51,6 +51,8 @@ function getPreferredLanguage(): string | undefined {
  */
 function isFastChatQuery(prompt: string): boolean {
   const trimmed = prompt.trim();
+  // Slash commands are skill/tool invocations and must go through the agent.
+  if (trimmed.startsWith('/')) return false;
   // Long prompts are likely task descriptions
   if (trimmed.length > 200) return false;
   // URLs require agent mode for web access (curl, CDP, etc.)
@@ -58,23 +60,79 @@ function isFastChatQuery(prompt: string): boolean {
   // Check for task-oriented keywords
   const taskKeywords = [
     // File operations
-    '创建', '生成', '写入', '删除', '修改', '编辑', '保存',
-    'create', 'generate', 'write', 'delete', 'modify', 'edit', 'save',
+    '创建',
+    '生成',
+    '写入',
+    '删除',
+    '修改',
+    '编辑',
+    '保存',
+    'create',
+    'generate',
+    'write',
+    'delete',
+    'modify',
+    'edit',
+    'save',
     // Development
-    '开发', '构建', '部署', '编译', '运行', '安装',
-    'develop', 'build', 'deploy', 'compile', 'run', 'install',
+    '开发',
+    '构建',
+    '部署',
+    '编译',
+    '运行',
+    '安装',
+    'develop',
+    'build',
+    'deploy',
+    'compile',
+    'run',
+    'install',
     // File paths
-    '文件', '文件夹', '目录', 'file', 'folder', 'directory', 'path',
+    '文件',
+    '文件夹',
+    '目录',
+    'file',
+    'folder',
+    'directory',
+    'path',
     // Code
-    '代码', '脚本', '函数', 'code', 'script', 'function',
+    '代码',
+    '脚本',
+    '函数',
+    'code',
+    'script',
+    'function',
     // Analysis
-    '分析', '扫描', '搜索', '查找', 'analyze', 'scan', 'search', 'find',
+    '分析',
+    '扫描',
+    '搜索',
+    '查找',
+    'analyze',
+    'scan',
+    'search',
+    'find',
     // Web
-    '网站', '网页', '爬取', '联网', '访问', '打开', '下载',
-    'website', 'webpage', 'scrape', 'fetch', 'browse', 'download', 'visit',
+    '网站',
+    '网页',
+    '爬取',
+    '联网',
+    '访问',
+    '打开',
+    '下载',
+    'website',
+    'webpage',
+    'scrape',
+    'fetch',
+    'browse',
+    'download',
+    'visit',
   ];
   const lower = trimmed.toLowerCase();
   return !taskKeywords.some((kw) => lower.includes(kw));
+}
+
+function isSlashCommand(prompt: string): boolean {
+  return /^\/[A-Za-z0-9][\w.-]*(?:\s|$)/.test(prompt.trim());
 }
 
 console.log(
@@ -179,7 +237,12 @@ function getModelConfig():
 
     if (!provider) return undefined;
 
-    const config: { apiKey?: string; baseUrl?: string; model?: string; apiType?: string } = {};
+    const config: {
+      apiKey?: string;
+      baseUrl?: string;
+      model?: string;
+      apiType?: string;
+    } = {};
 
     if (provider.apiKey) {
       config.apiKey = provider.apiKey;
@@ -257,10 +320,14 @@ function getSkillsConfig():
   try {
     const settings = getSettings();
 
-    // If global switch is off, return undefined (no skills)
     if (settings.skillsEnabled === false) {
       console.log('[useAgent] Skills disabled globally');
-      return undefined;
+      return {
+        enabled: false,
+        userDirEnabled: false,
+        appDirEnabled: false,
+        skillsPath: settings.skillsPath || undefined,
+      };
     }
 
     const config = {
@@ -1082,7 +1149,9 @@ export function useAgent(): UseAgentReturn {
                   type: msg.type as AgentMessage['type'],
                   content: msg.content || undefined,
                   name: msg.tool_name || undefined,
-                  input: msg.tool_input ? JSON.parse(msg.tool_input) : undefined,
+                  input: msg.tool_input
+                    ? JSON.parse(msg.tool_input)
+                    : undefined,
                   output: msg.tool_output || undefined,
                   toolUseId: msg.tool_use_id || undefined,
                   subtype: msg.subtype as AgentMessage['subtype'],
@@ -1299,7 +1368,11 @@ export function useAgent(): UseAgentReturn {
         const lastPlanMessage = [...agentMessages]
           .reverse()
           .find((m) => m.type === 'plan' && m.plan);
-        if (lastPlanMessage && lastPlanMessage.type === 'plan' && lastPlanMessage.plan) {
+        if (
+          lastPlanMessage &&
+          lastPlanMessage.type === 'plan' &&
+          lastPlanMessage.plan
+        ) {
           const planSteps = lastPlanMessage.plan.steps || [];
           // Check if plan has incomplete steps (pending or no status)
           const hasIncompleteSteps = planSteps.some(
@@ -1308,9 +1381,16 @@ export function useAgent(): UseAgentReturn {
 
           // Restore plan if task is not completed/stopped and has incomplete steps
           if (hasIncompleteSteps && !taskIsCompleted && !taskIsStopped) {
-            console.log('[useAgent] Restoring plan awaiting approval for task:', id, {
-              planSteps: planSteps.map((s) => ({ title: s.title, status: s.status })),
-            });
+            console.log(
+              '[useAgent] Restoring plan awaiting approval for task:',
+              id,
+              {
+                planSteps: planSteps.map((s) => ({
+                  description: s.description,
+                  status: s.status,
+                })),
+              }
+            );
             setPlan(lastPlanMessage.plan);
             setPhase('awaiting_approval');
           }
@@ -1705,9 +1785,19 @@ export function useAgent(): UseAgentReturn {
             try {
               const modelConfig = getModelConfig();
               const language = getPreferredLanguage();
-              console.log('[useAgent] Requesting title generation for prompt:', prompt.slice(0, 80));
-              console.log('[useAgent] Title request URL:', `${AGENT_SERVER_URL}/agent/title`);
-              console.log('[useAgent] Title request payload:', { prompt: prompt.slice(0, 80), hasModelConfig: !!modelConfig, language });
+              console.log(
+                '[useAgent] Requesting title generation for prompt:',
+                prompt.slice(0, 80)
+              );
+              console.log(
+                '[useAgent] Title request URL:',
+                `${AGENT_SERVER_URL}/agent/title`
+              );
+              console.log('[useAgent] Title request payload:', {
+                prompt: prompt.slice(0, 80),
+                hasModelConfig: !!modelConfig,
+                language,
+              });
               const res = await fetch(`${AGENT_SERVER_URL}/agent/title`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1724,7 +1814,11 @@ export function useAgent(): UseAgentReturn {
                 }
               } else {
                 const errorText = await res.text();
-                console.error('[useAgent] Title generation failed:', res.status, errorText);
+                console.error(
+                  '[useAgent] Title generation failed:',
+                  res.status,
+                  errorText
+                );
               }
             } catch (err) {
               console.error('[useAgent] Failed to generate title:', err);
@@ -1751,7 +1845,8 @@ export function useAgent(): UseAgentReturn {
       const hasImages = images && images.length > 0;
 
       // Save file attachments to disk and augment prompt with file paths
-      const fileAttachments = attachments?.filter((a) => a.type === 'file') || [];
+      const fileAttachments =
+        attachments?.filter((a) => a.type === 'file') || [];
       let augmentedPrompt = prompt;
       let savedFileRefs: AttachmentReference[] = [];
 
@@ -1770,7 +1865,10 @@ export function useAgent(): UseAgentReturn {
         if (saveFolder) {
           try {
             savedFileRefs = await saveAttachments(saveFolder, fileAttachments);
-            console.log('[useAgent] Saved file attachments:', savedFileRefs.map((r) => r.path));
+            console.log(
+              '[useAgent] Saved file attachments:',
+              savedFileRefs.map((r) => r.path)
+            );
             setFilesVersion((v) => v + 1);
 
             // Append file paths to prompt so the agent knows about them
@@ -1781,19 +1879,29 @@ export function useAgent(): UseAgentReturn {
           }
         } else {
           // Can't save to disk — include file content inline for small text files
-          console.warn('[useAgent] No folder available, embedding file content in prompt');
-          const fileInfo = fileAttachments.map((a) => {
-            // For text-based files, decode and include content
-            if (a.data && (a.mimeType?.startsWith('text/') || a.name.match(/\.(csv|txt|json|xml|tsv|md|log)$/i))) {
-              try {
-                const content = atob(a.data.includes(',') ? a.data.split(',')[1] : a.data);
-                return `[File: ${a.name}]\n${content}`;
-              } catch {
-                return `[File: ${a.name}] (unable to decode)`;
+          console.warn(
+            '[useAgent] No folder available, embedding file content in prompt'
+          );
+          const fileInfo = fileAttachments
+            .map((a) => {
+              // For text-based files, decode and include content
+              if (
+                a.data &&
+                (a.mimeType?.startsWith('text/') ||
+                  a.name.match(/\.(csv|txt|json|xml|tsv|md|log)$/i))
+              ) {
+                try {
+                  const content = atob(
+                    a.data.includes(',') ? a.data.split(',')[1] : a.data
+                  );
+                  return `[File: ${a.name}]\n${content}`;
+                } catch {
+                  return `[File: ${a.name}] (unable to decode)`;
+                }
               }
-            }
-            return `[File: ${a.name}] (binary file, unable to include inline)`;
-          }).join('\n\n');
+              return `[File: ${a.name}] (binary file, unable to include inline)`;
+            })
+            .join('\n\n');
           augmentedPrompt = `${prompt}\n\n${fileInfo}`;
         }
       }
@@ -1809,7 +1917,10 @@ export function useAgent(): UseAgentReturn {
         console.log('[useAgent] Valid images for API:', images?.length || 0);
         console.log('[useAgent] File attachments:', fileAttachments.length);
         console.log('[useAgent] computedSessionFolder:', computedSessionFolder);
-        console.log('[useAgent] augmentedPrompt:', augmentedPrompt.slice(0, 200));
+        console.log(
+          '[useAgent] augmentedPrompt:',
+          augmentedPrompt.slice(0, 200)
+        );
       }
 
       try {
@@ -1821,19 +1932,19 @@ export function useAgent(): UseAgentReturn {
         // If Claude Code is not available and no model is configured, the backend will return an error.
 
         // Fast chat detection: short text, no attachments, no file/code intent
-        // Only use fast chat for anthropic-messages providers (the chat service uses Anthropic SDK directly).
-        // OpenAI-format providers must go through the agent endpoint.
+        // The chat service handles both Anthropic (native SDK) and OpenAI-compatible (fetch) APIs.
         const hasFileAttachments = fileAttachments.length > 0;
-        const isAnthropicApi = !modelConfig?.apiType || modelConfig.apiType === 'anthropic-messages';
         const shouldUseFastChat =
           modelConfig &&
-          isAnthropicApi &&
           !hasFileAttachments &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(prompt)));
 
         if (shouldUseFastChat) {
-          console.log('[useAgent] Using fast chat for simple query, mode:', mode);
+          console.log(
+            '[useAgent] Using fast chat for simple query, mode:',
+            mode
+          );
           setPhase('executing');
 
           const language = getPreferredLanguage();
@@ -1863,8 +1974,7 @@ export function useAgent(): UseAgentReturn {
           const decoder = new TextDecoder();
           let buffer = '';
           let fullContent = '';
-          const isActiveTask = () =>
-            activeTaskIdRef.current === currentTaskId;
+          const isActiveTask = () => activeTaskIdRef.current === currentTaskId;
 
           while (true) {
             const { done, value } = await reader.read();
@@ -1888,10 +1998,16 @@ export function useAgent(): UseAgentReturn {
                         if (last && last.type === 'text') {
                           return [
                             ...prev.slice(0, -1),
-                            { ...last, content: (last.content || '') + data.content },
+                            {
+                              ...last,
+                              content: (last.content || '') + data.content,
+                            },
                           ];
                         }
-                        return [...prev, { type: 'text', content: data.content }];
+                        return [
+                          ...prev,
+                          { type: 'text', content: data.content },
+                        ];
                       });
                     }
                   } else if (data.type === 'done') {
@@ -1919,7 +2035,8 @@ export function useAgent(): UseAgentReturn {
               task_id: currentTaskId,
               type: 'user',
               content: prompt,
-              attachments: allRefs.length > 0 ? JSON.stringify(allRefs) : undefined,
+              attachments:
+                allRefs.length > 0 ? JSON.stringify(allRefs) : undefined,
             });
             if (fullContent) {
               await createMessage({
@@ -1936,10 +2053,14 @@ export function useAgent(): UseAgentReturn {
           return currentTaskId;
         }
 
-        // If images are attached, use direct execution (skip planning)
-        // because images need to be processed during execution, not planning
-        if (hasImages) {
-          console.log('[useAgent] Images attached, using direct execution');
+        // Images and slash skill commands must use direct execution.
+        // Planning has no tools, and fast chat bypasses skills entirely.
+        const shouldUseDirectAgent = hasImages || isSlashCommand(prompt);
+        if (shouldUseDirectAgent) {
+          console.log('[useAgent] Using direct execution', {
+            hasImages,
+            isSlashCommand: isSlashCommand(prompt),
+          });
           setPhase('executing');
 
           // Add user message with attachments to UI
@@ -1954,11 +2075,9 @@ export function useAgent(): UseAgentReturn {
           // file attachments were already saved earlier)
           try {
             const allRefs: AttachmentReference[] = [...savedFileRefs];
-            const imageAttachments = attachments?.filter((a) => a.type === 'image') || [];
-            if (
-              imageAttachments.length > 0 &&
-              computedSessionFolder
-            ) {
+            const imageAttachments =
+              attachments?.filter((a) => a.type === 'image') || [];
+            if (imageAttachments.length > 0 && computedSessionFolder) {
               const imageRefs = await saveAttachments(
                 computedSessionFolder,
                 imageAttachments
@@ -1973,7 +2092,8 @@ export function useAgent(): UseAgentReturn {
               task_id: currentTaskId,
               type: 'user',
               content: prompt,
-              attachments: allRefs.length > 0 ? JSON.stringify(allRefs) : undefined,
+              attachments:
+                allRefs.length > 0 ? JSON.stringify(allRefs) : undefined,
             });
           } catch (error) {
             console.error('Failed to save user message:', error);
@@ -2022,7 +2142,8 @@ export function useAgent(): UseAgentReturn {
             task_id: currentTaskId,
             type: 'user',
             content: prompt,
-            attachments: allRefs.length > 0 ? JSON.stringify(allRefs) : undefined,
+            attachments:
+              allRefs.length > 0 ? JSON.stringify(allRefs) : undefined,
           });
         } catch (error) {
           console.error('Failed to save user message:', error);
@@ -2419,7 +2540,11 @@ export function useAgent(): UseAgentReturn {
 
   // Continue conversation with context
   const continueConversation = useCallback(
-    async (reply: string, attachments?: MessageAttachment[], mode?: 'auto' | 'chat' | 'task'): Promise<void> => {
+    async (
+      reply: string,
+      attachments?: MessageAttachment[],
+      mode?: 'auto' | 'chat' | 'task'
+    ): Promise<void> => {
       if (isRunning || !taskId) return;
 
       // Add user message to UI immediately (with attachments if any)
@@ -2504,18 +2629,20 @@ export function useAgent(): UseAgentReturn {
         }
 
         // Fast chat detection for follow-up messages
-        // Only use fast chat for anthropic-messages providers
-        const hasFileAttachments = attachments?.some((a) => a.type === 'file') || false;
-        const isAnthropicApi = !modelConfig?.apiType || modelConfig.apiType === 'anthropic-messages';
+        // The chat service handles both Anthropic (native SDK) and OpenAI-compatible (fetch) APIs.
+        const hasFileAttachments =
+          attachments?.some((a) => a.type === 'file') || false;
         const shouldUseFastChat =
           modelConfig &&
-          isAnthropicApi &&
           !hasFileAttachments &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(reply)));
 
         if (shouldUseFastChat) {
-          console.log('[useAgent] continueConversation: Using fast chat, mode:', mode);
+          console.log(
+            '[useAgent] continueConversation: Using fast chat, mode:',
+            mode
+          );
           setPhase('executing');
 
           const language = getPreferredLanguage();
@@ -2566,13 +2693,23 @@ export function useAgent(): UseAgentReturn {
                     if (isActiveTask()) {
                       setMessages((prev) => {
                         const last = prev[prev.length - 1];
-                        if (last && last.type === 'text' && last !== userMessage) {
+                        if (
+                          last &&
+                          last.type === 'text' &&
+                          last !== userMessage
+                        ) {
                           return [
                             ...prev.slice(0, -1),
-                            { ...last, content: (last.content || '') + data.content },
+                            {
+                              ...last,
+                              content: (last.content || '') + data.content,
+                            },
                           ];
                         }
-                        return [...prev, { type: 'text', content: data.content }];
+                        return [
+                          ...prev,
+                          { type: 'text', content: data.content },
+                        ];
                       });
                     }
                   } else if (data.type === 'done') {
@@ -2624,6 +2761,7 @@ export function useAgent(): UseAgentReturn {
             images: hasImages ? images : undefined,
             skillsConfig,
             mcpConfig,
+            language: getPreferredLanguage(),
           }),
           signal: abortController.signal,
         });

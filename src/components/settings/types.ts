@@ -84,6 +84,7 @@ export interface SkillFile {
 export interface SkillInfo {
   id: string;
   name: string;
+  description?: string;
   source: 'claude' | 'workany';
   path: string;
   files: SkillFile[];

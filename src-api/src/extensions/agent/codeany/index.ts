@@ -11,6 +11,7 @@ import { join } from 'path';
 import {
   createAgent as createSdkAgent,
   formatSkillsForPrompt,
+  getSkill,
   query,
 } from '@codeany/open-agent-sdk';
 import type { AgentOptions as SdkAgentOptions } from '@codeany/open-agent-sdk';
@@ -87,6 +88,20 @@ function generateFallbackSlug(prompt: string, taskId: string): string {
 
   const suffix = taskId.slice(-6);
   return `${slug}-${suffix}`;
+}
+
+function parseSlashSkillInvocation(
+  prompt: string
+): { name: string; args: string } | null {
+  const match = prompt
+    .trim()
+    .match(/^\/([A-Za-z0-9][\w.-]*)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+
+  return {
+    name: match[1],
+    args: match[2] ?? '',
+  };
 }
 
 function getSessionWorkDir(
@@ -272,6 +287,51 @@ export class CodeAnyAgent extends BaseAgent {
       skillsPrompt,
       'When a skill matches the user request, invoke the Skill tool with the matching skill name before continuing.',
     ].join('\n\n');
+  }
+
+  private async resolveSlashSkillPrompt(
+    prompt: string,
+    sessionCwd: string,
+    options?: AgentOptions
+  ): Promise<string> {
+    const invocation = parseSlashSkillInvocation(prompt);
+    if (!invocation || options?.skillsConfig?.enabled === false) {
+      return prompt;
+    }
+
+    await syncSdkSkills(options?.skillsConfig);
+    const skill = getSkill(invocation.name);
+    if (!skill || (skill.isEnabled && !skill.isEnabled())) {
+      return prompt;
+    }
+
+    const blocks = await skill.getPrompt(invocation.args, {
+      cwd: sessionCwd,
+      abortSignal: options?.abortController?.signal,
+      model: this.config.model,
+      apiType: this.config.apiType,
+    });
+    const skillPrompt = blocks
+      .filter(
+        (block): block is { type: 'text'; text: string } =>
+          block.type === 'text'
+      )
+      .map((block) => block.text)
+      .join('\n\n');
+
+    if (!skillPrompt.trim()) {
+      return prompt;
+    }
+
+    return [
+      `The user explicitly invoked /${invocation.name}. Apply this skill before answering.`,
+      invocation.args.trim()
+        ? `Invocation arguments:\n${invocation.args.trim()}`
+        : '',
+      skillPrompt,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   private estimateTokenCount(text: string): number {
@@ -473,25 +533,30 @@ User's request (answer this AFTER reading the images):
       }
     }
 
+    const effectivePrompt = await this.resolveSlashSkillPrompt(
+      prompt,
+      sessionCwd,
+      options
+    );
     const conversationContext = this.formatConversationHistory(
       options?.conversation
     );
     const languageInstruction = buildLanguageInstruction(
       options?.language,
-      prompt
+      effectivePrompt
     );
 
     const enhancedPrompt = imageInstruction
       ? imageInstruction +
         languageInstruction +
-        prompt +
+        effectivePrompt +
         '\n\n' +
         getWorkspaceInstruction(sessionCwd, sandboxOpts) +
         conversationContext
       : getWorkspaceInstruction(sessionCwd, sandboxOpts) +
         conversationContext +
         languageInstruction +
-        prompt;
+        effectivePrompt;
 
     // Load MCP servers
     const userMcpServers = await loadMcpServers(

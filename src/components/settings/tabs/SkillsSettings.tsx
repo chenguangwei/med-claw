@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getClaudeSkillsDir } from '@/shared/lib/paths';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
@@ -7,6 +7,7 @@ import {
   ChevronDown,
   FolderOpen,
   Github,
+  Layers,
   Loader2,
   MoreHorizontal,
   Plus,
@@ -20,6 +21,50 @@ import { API_BASE_URL } from '../constants';
 import type { SettingsTabProps, SkillInfo } from '../types';
 
 // Parse YAML frontmatter from SKILL.md
+function stripYamlQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function readTopLevelYamlValue(
+  frontmatter: string,
+  key: string
+): string | undefined {
+  const lines = frontmatter.split(/\r?\n/);
+  const keyPattern = new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`);
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(keyPattern);
+    if (!match) continue;
+
+    const inlineValue = match[1].trim();
+    if (inlineValue && inlineValue !== '|' && inlineValue !== '>') {
+      return stripYamlQuotes(inlineValue);
+    }
+
+    const blockLines: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (/^[A-Za-z0-9_-]+:\s*/.test(line)) break;
+      blockLines.push(line.replace(/^\s+/, ''));
+    }
+
+    return stripYamlQuotes(blockLines.join('\n').trim());
+  }
+
+  return undefined;
+}
+
 function parseSkillMdFrontmatter(content: string): {
   name?: string;
   description?: string;
@@ -28,21 +73,10 @@ function parseSkillMdFrontmatter(content: string): {
   if (!frontmatterMatch) return {};
 
   const frontmatter = frontmatterMatch[1];
-  const result: { name?: string; description?: string } = {};
-
-  // Parse name
-  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
-  if (nameMatch) {
-    result.name = nameMatch[1].trim();
-  }
-
-  // Parse description
-  const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
-  if (descMatch) {
-    result.description = descMatch[1].trim();
-  }
-
-  return result;
+  return {
+    name: readTopLevelYamlValue(frontmatter, 'name'),
+    description: readTopLevelYamlValue(frontmatter, 'description'),
+  };
 }
 
 // Helper function to open folder in system file manager
@@ -181,182 +215,150 @@ export function SkillsSettings({
       return 0;
     });
 
-  const loadSkillsFromPath = async (skillsPath: string) => {
-    setLoading(true);
-    try {
-      // Get all skills directories (workany and claude)
-      const dirsResponse = await fetch(`${API_BASE_URL}/files/skills-dir`);
-      const dirsData = await dirsResponse.json();
+  const loadSkillsFromPath = useCallback(
+    async (skillsPath: string) => {
+      setLoading(true);
+      try {
+        // Get all skills directories (workany and claude)
+        const dirsResponse = await fetch(`${API_BASE_URL}/files/skills-dir`);
+        const dirsData = await dirsResponse.json();
 
-      const allSkills: SkillInfo[] = [];
+        const allSkills: SkillInfo[] = [];
 
-      // Save directory paths
-      const dirs: { user: string; app: string } = { user: '', app: '' };
-      if (dirsData.directories) {
-        for (const dir of dirsData.directories as {
-          name: string;
-          path: string;
-          exists: boolean;
-        }[]) {
-          if (dir.name === 'claude') {
-            dirs.user = dir.path;
-          } else if (dir.name === 'workany') {
-            dirs.app = dir.path;
+        // Save directory paths
+        const dirs: { user: string; app: string } = { user: '', app: '' };
+        if (dirsData.directories) {
+          for (const dir of dirsData.directories as {
+            name: string;
+            path: string;
+            exists: boolean;
+          }[]) {
+            if (dir.name === 'claude') {
+              dirs.user = dir.path;
+            } else if (dir.name === 'workany') {
+              dirs.app = dir.path;
+            }
           }
         }
-      }
-      setSkillsDirs(dirs);
+        setSkillsDirs(dirs);
 
-      // Load skills from user directory only (claude)
-      if (dirsData.directories) {
-        for (const dir of dirsData.directories as {
-          name: string;
-          path: string;
-          exists: boolean;
-        }[]) {
-          // Only load from user directory (claude), skip app directory (workany)
-          if (dir.name !== 'claude' || !dir.exists) continue;
+        const loadSkillDirectory = async (
+          rootPath: string,
+          idPrefix: string,
+          source: 'claude' | 'workany',
+          enabled: boolean
+        ) => {
+          const filesResponse = await fetch(`${API_BASE_URL}/files/readdir`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: rootPath, maxDepth: 3 }),
+          });
+          const filesData = await filesResponse.json();
 
-          try {
-            const filesResponse = await fetch(`${API_BASE_URL}/files/readdir`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: dir.path, maxDepth: 3 }),
-            });
-            const filesData = await filesResponse.json();
+          if (!filesData.success || !filesData.files) return;
 
-            if (filesData.success && filesData.files) {
-              for (const folder of filesData.files) {
-                if (folder.isDir) {
-                  // Read SKILL.md for name and description
-                  let skillName = folder.name;
-                  let description = '';
-                  try {
-                    const skillMdPath = `${folder.path}/SKILL.md`;
-                    const mdResponse = await fetch(
-                      `${API_BASE_URL}/files/read`,
-                      {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: skillMdPath }),
-                      }
-                    );
-                    const mdData = await mdResponse.json();
-                    if (mdData.success && mdData.content) {
-                      const frontmatter = parseSkillMdFrontmatter(
-                        mdData.content
-                      );
-                      if (frontmatter.name) {
-                        skillName = frontmatter.name;
-                      }
-                      if (frontmatter.description) {
-                        description = frontmatter.description;
-                      }
-                    }
-                  } catch {
-                    // Ignore errors reading SKILL.md
-                  }
+          for (const folder of filesData.files) {
+            if (!folder.isDir) continue;
 
-                  allSkills.push({
-                    id: `${dir.name}-${folder.name}`,
-                    name: skillName,
-                    source: dir.name as 'claude' | 'workany',
-                    path: folder.path,
-                    files: folder.children || [],
-                    enabled: true,
-                    description,
-                  });
+            let skillName = folder.name;
+            let description = '';
+            try {
+              const skillMdPath = `${folder.path}/SKILL.md`;
+              const mdResponse = await fetch(`${API_BASE_URL}/files/read`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: skillMdPath }),
+              });
+              const mdData = await mdResponse.json();
+              if (mdData.success && mdData.content) {
+                const frontmatter = parseSkillMdFrontmatter(mdData.content);
+                if (frontmatter.name) {
+                  skillName = frontmatter.name;
+                }
+                if (frontmatter.description) {
+                  description = frontmatter.description;
                 }
               }
+            } catch {
+              // Ignore errors reading SKILL.md
             }
-          } catch (err) {
-            console.error(
-              `[Skills] Failed to load skills from ${dir.name}:`,
-              err
-            );
-          }
-        }
-      }
 
-      // Also load from user-configured skillsPath if different from default directories
-      if (skillsPath) {
-        const isDefaultDir = dirsData.directories?.some(
-          (d: { path: string }) => d.path === skillsPath
-        );
-        if (!isDefaultDir) {
-          try {
-            const filesResponse = await fetch(`${API_BASE_URL}/files/readdir`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: skillsPath, maxDepth: 3 }),
+            allSkills.push({
+              id: `${idPrefix}-${folder.name}`,
+              name: skillName,
+              source,
+              path: folder.path,
+              files: folder.children || [],
+              enabled,
+              description,
             });
-            const filesData = await filesResponse.json();
+          }
+        };
 
-            if (filesData.success && filesData.files) {
-              for (const folder of filesData.files) {
-                if (folder.isDir) {
-                  // Read SKILL.md for name and description
-                  let skillName = folder.name;
-                  let description = '';
-                  try {
-                    const skillMdPath = `${folder.path}/SKILL.md`;
-                    const mdResponse = await fetch(
-                      `${API_BASE_URL}/files/read`,
-                      {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: skillMdPath }),
-                      }
-                    );
-                    const mdData = await mdResponse.json();
-                    if (mdData.success && mdData.content) {
-                      const frontmatter = parseSkillMdFrontmatter(
-                        mdData.content
-                      );
-                      if (frontmatter.name) {
-                        skillName = frontmatter.name;
-                      }
-                      if (frontmatter.description) {
-                        description = frontmatter.description;
-                      }
-                    }
-                  } catch {
-                    // Ignore errors reading SKILL.md
-                  }
-
-                  allSkills.push({
-                    id: `custom-${folder.name}`,
-                    name: skillName,
-                    source: 'workany',
-                    path: folder.path,
-                    files: folder.children || [],
-                    enabled: true,
-                    description,
-                  });
-                }
-              }
+        // Load skills from both user and WorkAny app directories.
+        if (dirsData.directories) {
+          for (const dir of dirsData.directories as {
+            name: string;
+            path: string;
+            exists: boolean;
+          }[]) {
+            if (!dir.exists) continue;
+            const source = dir.name === 'claude' ? 'claude' : 'workany';
+            const enabled =
+              dir.name === 'claude'
+                ? settings.skillsUserDirEnabled !== false
+                : settings.skillsAppDirEnabled !== false;
+            try {
+              await loadSkillDirectory(dir.path, dir.name, source, enabled);
+            } catch (err) {
+              console.error(
+                `[Skills] Failed to load skills from ${dir.name}:`,
+                err
+              );
             }
-          } catch (err) {
-            console.error(
-              '[Skills] Failed to load skills from custom path:',
-              err
-            );
           }
         }
-      }
 
-      setSkills(allSkills);
-    } catch (err) {
-      console.error('[Skills] Failed to load skills:', err);
-      setSkills([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+        // Also load from user-configured skillsPath if different from default directories
+        if (skillsPath) {
+          const isDefaultDir = dirsData.directories?.some(
+            (d: { path: string }) => d.path === skillsPath
+          );
+          if (!isDefaultDir) {
+            try {
+              await loadSkillDirectory(
+                skillsPath,
+                'custom',
+                'workany',
+                settings.skillsEnabled !== false
+              );
+            } catch (err) {
+              console.error(
+                '[Skills] Failed to load skills from custom path:',
+                err
+              );
+            }
+          }
+        }
+
+        setSkills(allSkills);
+      } catch (err) {
+        console.error('[Skills] Failed to load skills:', err);
+        setSkills([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      settings.skillsAppDirEnabled,
+      settings.skillsEnabled,
+      settings.skillsUserDirEnabled,
+    ]
+  );
 
   useEffect(() => {
     loadSkillsFromPath(settings.skillsPath);
-  }, [settings.skillsPath]);
+  }, [loadSkillsFromPath, settings.skillsPath]);
 
   // Initialize platform-aware default path
   useEffect(() => {
@@ -467,7 +469,9 @@ export function SkillsSettings({
                       <div className="border-border bg-popover absolute top-full right-0 z-50 mt-1 min-w-[180px] rounded-xl border py-1 shadow-lg">
                         <button
                           onClick={() => {
-                            openFolderInSystem(skillsDirs.user);
+                            openFolderInSystem(
+                              skillsDirs.user || defaultSkillsPath
+                            );
                             setShowAddMenu(false);
                           }}
                           className="hover:bg-accent flex w-full items-center gap-3 px-3 py-2 text-left transition-colors"
@@ -542,25 +546,66 @@ export function SkillsSettings({
               </div>
             </div>
 
-            {/* Skills Directory */}
+            {/* Skills Directories */}
             <div
               className={cn(
-                'border-border bg-background rounded-xl border p-4 transition-opacity',
+                'border-border bg-background space-y-4 rounded-xl border p-4 transition-opacity',
                 settings.skillsEnabled === false && 'opacity-50'
               )}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <h3 className="text-foreground text-sm font-medium">
-                    {t.settings.skillsSource}
+                    {t.settings.skillsLoadFromUser}
                   </h3>
                   <code className="bg-muted text-muted-foreground mt-2 block truncate rounded px-2 py-1 text-xs">
                     {skillsDirs.user || defaultSkillsPath}
                   </code>
                 </div>
                 <div className="ml-4 flex shrink-0 items-center gap-2">
+                  <Switch
+                    checked={settings.skillsUserDirEnabled !== false}
+                    onChange={(checked) =>
+                      onSettingsChange({
+                        ...settings,
+                        skillsUserDirEnabled: checked,
+                      })
+                    }
+                  />
                   <button
-                    onClick={() => openFolderInSystem(skillsDirs.user)}
+                    onClick={() =>
+                      openFolderInSystem(skillsDirs.user || defaultSkillsPath)
+                    }
+                    className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-2 transition-colors"
+                    title={t.settings.skillsOpenFolder}
+                  >
+                    <FolderOpen className="size-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-foreground text-sm font-medium">
+                    {t.settings.skillsLoadFromApp}
+                  </h3>
+                  <code className="bg-muted text-muted-foreground mt-2 block truncate rounded px-2 py-1 text-xs">
+                    {skillsDirs.app || settings.skillsPath}
+                  </code>
+                </div>
+                <div className="ml-4 flex shrink-0 items-center gap-2">
+                  <Switch
+                    checked={settings.skillsAppDirEnabled !== false}
+                    onChange={(checked) =>
+                      onSettingsChange({
+                        ...settings,
+                        skillsAppDirEnabled: checked,
+                      })
+                    }
+                  />
+                  <button
+                    onClick={() =>
+                      openFolderInSystem(skillsDirs.app || settings.skillsPath)
+                    }
                     className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-2 transition-colors"
                     title={t.settings.skillsOpenFolder}
                   >

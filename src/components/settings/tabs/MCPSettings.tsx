@@ -6,7 +6,6 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
   ChevronDown,
   FileJson,
-  FolderOpen,
   Loader2,
   MoreHorizontal,
   Plus,
