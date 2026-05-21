@@ -5,11 +5,12 @@
  * Runs entirely in-process — no external CLI binary required.
  */
 
-import { existsSync } from 'fs';
 import { mkdir, writeFile } from 'fs/promises';
 import { homedir, platform } from 'os';
 import { join } from 'path';
 import {
+  createAgent as createSdkAgent,
+  formatSkillsForPrompt,
   query,
 } from '@codeany/open-agent-sdk';
 import type { AgentOptions as SdkAgentOptions } from '@codeany/open-agent-sdk';
@@ -36,14 +37,14 @@ import type {
   ImageAttachment,
   McpConfig,
   PlanOptions,
-  SkillsConfig,
 } from '@/core/agent/types';
 import {
   DEFAULT_API_HOST,
   DEFAULT_API_PORT,
   DEFAULT_WORK_DIR,
 } from '@/config/constants';
-import { loadMcpServers, type McpServerConfig } from '@/shared/mcp/loader';
+import { loadMcpServers } from '@/shared/mcp/loader';
+import { syncSdkSkills } from '@/shared/skills/loader';
 import { createLogger, LOG_FILE_PATH } from '@/shared/utils/logger';
 
 const logger = createLogger('CodeAnyAgent');
@@ -95,8 +96,11 @@ function getSessionWorkDir(
 ): string {
   const expandedPath = expandPath(workDir);
 
-  const hasSessionsPath = expandedPath.includes('/sessions/') || expandedPath.includes('\\sessions\\');
-  const endsWithSessions = expandedPath.endsWith('/sessions') || expandedPath.endsWith('\\sessions');
+  const hasSessionsPath =
+    expandedPath.includes('/sessions/') ||
+    expandedPath.includes('\\sessions\\');
+  const endsWithSessions =
+    expandedPath.endsWith('/sessions') || expandedPath.endsWith('\\sessions');
   if (hasSessionsPath && !endsWithSessions) {
     return expandedPath;
   }
@@ -202,6 +206,7 @@ export class CodeAnyAgent extends BaseAgent {
     options?: AgentOptions,
     extraOpts?: Partial<SdkAgentOptions>
   ): SdkAgentOptions {
+    const allowedTools = options?.allowedTools || ALLOWED_TOOLS;
     const sdkOpts: SdkAgentOptions = {
       cwd: sessionCwd,
       model: this.config.model,
@@ -225,7 +230,10 @@ export class CodeAnyAgent extends BaseAgent {
     }
 
     // Set allowed tools
-    sdkOpts.allowedTools = options?.allowedTools || ALLOWED_TOOLS;
+    sdkOpts.allowedTools =
+      options?.skillsConfig?.enabled === false
+        ? allowedTools.filter((tool) => tool !== 'Skill')
+        : allowedTools;
 
     // Set abort controller
     if (options?.abortController) {
@@ -235,29 +243,65 @@ export class CodeAnyAgent extends BaseAgent {
     return sdkOpts;
   }
 
+  private async buildSkillsSystemPrompt(
+    options?: AgentOptions
+  ): Promise<string> {
+    if (options?.skillsConfig?.enabled === false) {
+      await syncSdkSkills(options.skillsConfig);
+      return '';
+    }
+
+    const allowedTools = options?.allowedTools || ALLOWED_TOOLS;
+    if (!allowedTools.includes('Skill')) {
+      return '';
+    }
+
+    const fileSkills = await syncSdkSkills(options?.skillsConfig);
+    const skillsPrompt = formatSkillsForPrompt(500000);
+    if (!skillsPrompt) {
+      logger.info('[CodeAnyAgent] No invocable skills registered');
+      return '';
+    }
+
+    logger.info(
+      `[CodeAnyAgent] Skills ready: ${fileSkills.length} file skill(s)`
+    );
+
+    return [
+      '# Available Skills',
+      skillsPrompt,
+      'When a skill matches the user request, invoke the Skill tool with the matching skill name before continuing.',
+    ].join('\n\n');
+  }
+
   private estimateTokenCount(text: string): number {
     return Math.ceil(text.length / 4);
   }
 
-  private formatConversationHistory(conversation?: ConversationMessage[]): string {
+  private formatConversationHistory(
+    conversation?: ConversationMessage[]
+  ): string {
     if (!conversation || conversation.length === 0) return '';
 
-    const maxHistoryTokens = this.config.providerConfig?.maxHistoryTokens as number || 2000;
+    const maxHistoryTokens =
+      (this.config.providerConfig?.maxHistoryTokens as number) || 2000;
     const minMessagesToKeep = 3;
 
     const allFormattedMessages = conversation.map((msg) => {
       const role = msg.role === 'user' ? 'User' : 'Assistant';
       let messageContent = `${role}: ${msg.content}`;
       if (msg.imagePaths && msg.imagePaths.length > 0) {
-        const imageRefs = msg.imagePaths.map((p, i) => `  - Image ${i + 1}: ${p}`).join('\n');
+        const imageRefs = msg.imagePaths
+          .map((p, i) => `  - Image ${i + 1}: ${p}`)
+          .join('\n');
         messageContent += `\n[Attached images:\n${imageRefs}\nUse Read tool to view these images if needed]`;
       }
       return messageContent;
     });
 
-    const messageTokens = allFormattedMessages.map(msg => ({
+    const messageTokens = allFormattedMessages.map((msg) => ({
       content: msg,
-      tokens: this.estimateTokenCount(msg)
+      tokens: this.estimateTokenCount(msg),
     }));
 
     let totalTokens = 0;
@@ -287,9 +331,10 @@ export class CodeAnyAgent extends BaseAgent {
     if (selectedMessages.length === 0) return '';
 
     const formattedMessages = selectedMessages.join('\n\n');
-    const truncationNotice = conversation.length > selectedMessages.length
-      ? `\n\n[Note: Showing ${selectedMessages.length} of ${conversation.length} messages.]`
-      : '';
+    const truncationNotice =
+      conversation.length > selectedMessages.length
+        ? `\n\n[Note: Showing ${selectedMessages.length} of ${conversation.length} messages.]`
+        : '';
 
     return `## Previous Conversation Context\n\n${formattedMessages}${truncationNotice}\n\n---\n## Current Request\n`;
   }
@@ -298,9 +343,15 @@ export class CodeAnyAgent extends BaseAgent {
     let sanitized = text;
 
     const apiKeyErrorPatterns = [
-      /Invalid API key/i, /invalid_api_key/i, /API key.*invalid/i,
-      /authentication.*fail/i, /Unauthorized/i,
-      /身份验证失败/, /认证失败/, /鉴权失败/, /密钥无效/,
+      /Invalid API key/i,
+      /invalid_api_key/i,
+      /API key.*invalid/i,
+      /authentication.*fail/i,
+      /Unauthorized/i,
+      /身份验证失败/,
+      /认证失败/,
+      /鉴权失败/,
+      /密钥无效/,
     ];
 
     if (apiKeyErrorPatterns.some((p) => p.test(sanitized))) {
@@ -338,7 +389,12 @@ export class CodeAnyAgent extends BaseAgent {
           const toolId = block.id as string;
           if (!sentToolIds.has(toolId)) {
             sentToolIds.add(toolId);
-            yield { type: 'tool_use', id: toolId, name: block.name as string, input: block.input };
+            yield {
+              type: 'tool_use',
+              id: toolId,
+              name: block.name as string,
+              input: block.input,
+            };
           }
         }
       }
@@ -355,8 +411,10 @@ export class CodeAnyAgent extends BaseAgent {
 
     if (msg.type === 'result') {
       yield {
-        type: 'result', content: msg.subtype,
-        cost: msg.total_cost_usd, duration: msg.duration_ms,
+        type: 'result',
+        content: msg.subtype,
+        cost: msg.total_cost_usd,
+        duration: msg.duration_ms,
       };
     }
   }
@@ -365,7 +423,10 @@ export class CodeAnyAgent extends BaseAgent {
   // Core agent methods
   // ==========================================================================
 
-  async *run(prompt: string, options?: AgentOptions): AsyncGenerator<AgentMessage> {
+  async *run(
+    prompt: string,
+    options?: AgentOptions
+  ): AsyncGenerator<AgentMessage> {
     const session = this.createSession('executing', {
       id: options?.sessionId,
       abortController: options?.abortController,
@@ -373,7 +434,9 @@ export class CodeAnyAgent extends BaseAgent {
     yield { type: 'session', sessionId: session.id };
 
     const sessionCwd = getSessionWorkDir(
-      options?.cwd || this.config.workDir, prompt, options?.taskId
+      options?.cwd || this.config.workDir,
+      prompt,
+      options?.taskId
     );
     await ensureDir(sessionCwd);
     logger.info(`[CodeAny ${session.id}] Working Directory: ${sessionCwd}`);
@@ -382,7 +445,11 @@ export class CodeAnyAgent extends BaseAgent {
     const sentToolIds = new Set<string>();
 
     const sandboxOpts: SandboxOptions | undefined = options?.sandbox?.enabled
-      ? { enabled: true, image: options.sandbox.image, apiEndpoint: options.sandbox.apiEndpoint || SANDBOX_API_URL }
+      ? {
+          enabled: true,
+          image: options.sandbox.image,
+          apiEndpoint: options.sandbox.apiEndpoint || SANDBOX_API_URL,
+        }
       : undefined;
 
     // Handle image attachments
@@ -406,15 +473,30 @@ User's request (answer this AFTER reading the images):
       }
     }
 
-    const conversationContext = this.formatConversationHistory(options?.conversation);
-    const languageInstruction = buildLanguageInstruction(options?.language, prompt);
+    const conversationContext = this.formatConversationHistory(
+      options?.conversation
+    );
+    const languageInstruction = buildLanguageInstruction(
+      options?.language,
+      prompt
+    );
 
     const enhancedPrompt = imageInstruction
-      ? imageInstruction + languageInstruction + prompt + '\n\n' + getWorkspaceInstruction(sessionCwd, sandboxOpts) + conversationContext
-      : getWorkspaceInstruction(sessionCwd, sandboxOpts) + conversationContext + languageInstruction + prompt;
+      ? imageInstruction +
+        languageInstruction +
+        prompt +
+        '\n\n' +
+        getWorkspaceInstruction(sessionCwd, sandboxOpts) +
+        conversationContext
+      : getWorkspaceInstruction(sessionCwd, sandboxOpts) +
+        conversationContext +
+        languageInstruction +
+        prompt;
 
     // Load MCP servers
-    const userMcpServers = await loadMcpServers(options?.mcpConfig as McpConfig | undefined);
+    const userMcpServers = await loadMcpServers(
+      options?.mcpConfig as McpConfig | undefined
+    );
 
     const sdkOpts = this.buildSdkOptions(sessionCwd, options, {
       abortController: options?.abortController || session.abortController,
@@ -423,40 +505,75 @@ User's request (answer this AFTER reading the images):
     // Add MCP servers if any
     if (Object.keys(userMcpServers).length > 0) {
       sdkOpts.mcpServers = userMcpServers;
-      logger.info(`[CodeAny ${session.id}] MCP servers: ${Object.keys(userMcpServers).join(', ')}`);
+      logger.info(
+        `[CodeAny ${session.id}] MCP servers: ${Object.keys(userMcpServers).join(', ')}`
+      );
     }
 
     logger.info(`[CodeAny ${session.id}] ========== AGENT START ==========`);
-    logger.info(`[CodeAny ${session.id}] Model: ${this.config.model || '(default)'}`);
-    logger.info(`[CodeAny ${session.id}] Custom API: ${this.isUsingCustomApi()}`);
-    logger.info(`[CodeAny ${session.id}] Prompt length: ${enhancedPrompt.length} chars`);
+    logger.info(
+      `[CodeAny ${session.id}] Model: ${this.config.model || '(default)'}`
+    );
+    logger.info(
+      `[CodeAny ${session.id}] Custom API: ${this.isUsingCustomApi()}`
+    );
+    logger.info(
+      `[CodeAny ${session.id}] Prompt length: ${enhancedPrompt.length} chars`
+    );
 
     try {
-      for await (const message of query({ prompt: enhancedPrompt, options: sdkOpts })) {
-        if (session.abortController.signal.aborted) break;
-        yield* this.processMessage(message, session.id, sentTextHashes, sentToolIds);
+      const sdkAgent = createSdkAgent(sdkOpts);
+      try {
+        const skillsSystemPrompt = await this.buildSkillsSystemPrompt(options);
+        const queryOverrides: Partial<SdkAgentOptions> | undefined =
+          skillsSystemPrompt
+            ? { appendSystemPrompt: skillsSystemPrompt }
+            : undefined;
+
+        for await (const message of sdkAgent.query(
+          enhancedPrompt,
+          queryOverrides
+        )) {
+          if (session.abortController.signal.aborted) break;
+          yield* this.processMessage(
+            message,
+            session.id,
+            sentTextHashes,
+            sentToolIds
+          );
+        }
+      } finally {
+        await sdkAgent.close();
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       logger.error(`[CodeAny ${session.id}] Error:`, { message: errorMessage });
 
       const noApiKeyConfigured = !this.config.apiKey;
       const usingCustomApi = this.isUsingCustomApi();
 
       const isApiKeyError =
-        errorMessage.includes('Invalid API key') || errorMessage.includes('invalid_api_key') ||
-        errorMessage.includes('API key') || errorMessage.includes('authentication') ||
-        errorMessage.includes('Unauthorized') || errorMessage.includes('401') ||
-        errorMessage.includes('403') || noApiKeyConfigured;
+        errorMessage.includes('Invalid API key') ||
+        errorMessage.includes('invalid_api_key') ||
+        errorMessage.includes('API key') ||
+        errorMessage.includes('authentication') ||
+        errorMessage.includes('Unauthorized') ||
+        errorMessage.includes('401') ||
+        errorMessage.includes('403') ||
+        noApiKeyConfigured;
 
-      const isApiCompatibilityError = usingCustomApi && (
-        errorMessage.includes('model') || errorMessage.includes('not found')
-      );
+      const isApiCompatibilityError =
+        usingCustomApi &&
+        (errorMessage.includes('model') || errorMessage.includes('not found'));
 
       if (isApiKeyError) {
         yield { type: 'error', message: '__API_KEY_ERROR__' };
       } else if (isApiCompatibilityError) {
-        yield { type: 'error', message: `__CUSTOM_API_ERROR__|${this.config.baseUrl}|${LOG_FILE_PATH}` };
+        yield {
+          type: 'error',
+          message: `__CUSTOM_API_ERROR__|${this.config.baseUrl}|${LOG_FILE_PATH}`,
+        };
       } else {
         yield { type: 'error', message: `__INTERNAL_ERROR__|${LOG_FILE_PATH}` };
       }
@@ -466,7 +583,10 @@ User's request (answer this AFTER reading the images):
     }
   }
 
-  async *plan(prompt: string, options?: PlanOptions): AsyncGenerator<AgentMessage> {
+  async *plan(
+    prompt: string,
+    options?: PlanOptions
+  ): AsyncGenerator<AgentMessage> {
     const session = this.createSession('planning', {
       id: options?.sessionId,
       abortController: options?.abortController,
@@ -474,14 +594,23 @@ User's request (answer this AFTER reading the images):
     yield { type: 'session', sessionId: session.id };
 
     const sessionCwd = getSessionWorkDir(
-      options?.cwd || this.config.workDir, prompt, options?.taskId
+      options?.cwd || this.config.workDir,
+      prompt,
+      options?.taskId
     );
     await ensureDir(sessionCwd);
     logger.info(`[CodeAny ${session.id}] Planning started, cwd: ${sessionCwd}`);
 
     const workspaceInstruction = `\n## CRITICAL: Output Directory\n**ALL files must be saved to: ${sessionCwd}**\n`;
-    const languageInstruction = buildLanguageInstruction(options?.language, prompt);
-    const planningPrompt = workspaceInstruction + PLANNING_INSTRUCTION + languageInstruction + prompt;
+    const languageInstruction = buildLanguageInstruction(
+      options?.language,
+      prompt
+    );
+    const planningPrompt =
+      workspaceInstruction +
+      PLANNING_INSTRUCTION +
+      languageInstruction +
+      prompt;
 
     let fullResponse = '';
 
@@ -491,10 +620,16 @@ User's request (answer this AFTER reading the images):
     });
 
     try {
-      for await (const message of query({ prompt: planningPrompt, options: sdkOpts })) {
+      for await (const message of query({
+        prompt: planningPrompt,
+        options: sdkOpts,
+      })) {
         if (session.abortController.signal.aborted) break;
 
-        if ((message as any).type === 'assistant' && (message as any).message?.content) {
+        if (
+          (message as any).type === 'assistant' &&
+          (message as any).message?.content
+        ) {
           for (const block of (message as any).message.content) {
             if ('text' in block) {
               fullResponse += block.text;
@@ -508,7 +643,10 @@ User's request (answer this AFTER reading the images):
 
       if (planningResult?.type === 'direct_answer') {
         yield { type: 'direct_answer', content: planningResult.answer };
-      } else if (planningResult?.type === 'plan' && planningResult.plan.steps.length > 0) {
+      } else if (
+        planningResult?.type === 'plan' &&
+        planningResult.plan.steps.length > 0
+      ) {
         this.storePlan(planningResult.plan);
         yield { type: 'plan', plan: planningResult.plan };
       } else {
@@ -522,7 +660,10 @@ User's request (answer this AFTER reading the images):
       }
     } catch (error) {
       logger.error(`[CodeAny ${session.id}] Planning error:`, error);
-      yield { type: 'error', message: error instanceof Error ? error.message : String(error) };
+      yield {
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       yield { type: 'done' };
     }
@@ -543,23 +684,40 @@ User's request (answer this AFTER reading the images):
     }
 
     const sessionCwd = getSessionWorkDir(
-      options.cwd || this.config.workDir, options.originalPrompt, options.taskId
+      options.cwd || this.config.workDir,
+      options.originalPrompt,
+      options.taskId
     );
     await ensureDir(sessionCwd);
-    logger.info(`[CodeAny ${session.id}] Executing plan: ${plan.id}, cwd: ${sessionCwd}`);
+    logger.info(
+      `[CodeAny ${session.id}] Executing plan: ${plan.id}, cwd: ${sessionCwd}`
+    );
 
     const sandboxOpts: SandboxOptions | undefined = options.sandbox?.enabled
-      ? { enabled: true, image: options.sandbox.image, apiEndpoint: options.sandbox.apiEndpoint || SANDBOX_API_URL }
+      ? {
+          enabled: true,
+          image: options.sandbox.image,
+          apiEndpoint: options.sandbox.apiEndpoint || SANDBOX_API_URL,
+        }
       : undefined;
 
     const executionPrompt =
-      formatPlanForExecution(plan, sessionCwd, sandboxOpts, options.language, options.originalPrompt) +
-      '\n\nOriginal request: ' + options.originalPrompt;
+      formatPlanForExecution(
+        plan,
+        sessionCwd,
+        sandboxOpts,
+        options.language,
+        options.originalPrompt
+      ) +
+      '\n\nOriginal request: ' +
+      options.originalPrompt;
 
     const sentTextHashes = new Set<string>();
     const sentToolIds = new Set<string>();
 
-    const userMcpServers = await loadMcpServers(options.mcpConfig as McpConfig | undefined);
+    const userMcpServers = await loadMcpServers(
+      options.mcpConfig as McpConfig | undefined
+    );
 
     const sdkOpts = this.buildSdkOptions(sessionCwd, options, {
       abortController: options.abortController || session.abortController,
@@ -570,13 +728,35 @@ User's request (answer this AFTER reading the images):
     }
 
     try {
-      for await (const message of query({ prompt: executionPrompt, options: sdkOpts })) {
-        if (session.abortController.signal.aborted) break;
-        yield* this.processMessage(message, session.id, sentTextHashes, sentToolIds);
+      const sdkAgent = createSdkAgent(sdkOpts);
+      try {
+        const skillsSystemPrompt = await this.buildSkillsSystemPrompt(options);
+        const queryOverrides: Partial<SdkAgentOptions> | undefined =
+          skillsSystemPrompt
+            ? { appendSystemPrompt: skillsSystemPrompt }
+            : undefined;
+
+        for await (const message of sdkAgent.query(
+          executionPrompt,
+          queryOverrides
+        )) {
+          if (session.abortController.signal.aborted) break;
+          yield* this.processMessage(
+            message,
+            session.id,
+            sentTextHashes,
+            sentToolIds
+          );
+        }
+      } finally {
+        await sdkAgent.close();
       }
     } catch (error) {
       logger.error(`[CodeAny ${session.id}] Execution error:`, error);
-      yield { type: 'error', message: error instanceof Error ? error.message : String(error) };
+      yield {
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       this.deletePlan(options.planId);
       this.sessions.delete(session.id);

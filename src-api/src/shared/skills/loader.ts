@@ -8,10 +8,18 @@
  * This module is used for listing skills in the settings UI.
  */
 
-import fs from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, dirname } from 'path';
+import fs from 'fs/promises';
+import { homedir } from 'os';
+import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import {
+  getSkill,
+  initBundledSkills,
+  registerSkill,
+  unregisterSkill,
+} from '@codeany/open-agent-sdk';
+import type { SkillDefinition } from '@codeany/open-agent-sdk';
 
 import { getClaudeSkillsDir, getWorkanySkillsDir } from '@/config/constants';
 
@@ -25,6 +33,9 @@ export interface SkillMetadata {
   author?: string;
   version?: string;
   argumentHint?: string;
+  whenToUse?: string;
+  allowedTools?: string[];
+  userInvocable?: boolean;
 }
 
 /**
@@ -42,6 +53,96 @@ export interface LoadedSkill {
  */
 export interface SkillsConfig {
   enabled: boolean;
+  userDirEnabled?: boolean;
+  appDirEnabled?: boolean;
+  skillsPath?: string;
+}
+
+const registeredFileSkillNames = new Set<string>();
+const replacedSdkSkills = new Map<string, SkillDefinition>();
+
+function stripYamlQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function readTopLevelYamlValue(
+  frontmatter: string,
+  key: string
+): string | undefined {
+  const lines = frontmatter.split(/\r?\n/);
+  const keyPattern = new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`);
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(keyPattern);
+    if (!match) continue;
+
+    const inlineValue = match[1].trim();
+    if (inlineValue && inlineValue !== '|' && inlineValue !== '>') {
+      return stripYamlQuotes(inlineValue);
+    }
+
+    const blockLines: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (/^[A-Za-z0-9_-]+:\s*/.test(line)) break;
+      blockLines.push(line.replace(/^\s+/, ''));
+    }
+
+    return stripYamlQuotes(blockLines.join('\n').trim());
+  }
+
+  return undefined;
+}
+
+function readFirstYamlValue(
+  frontmatter: string,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = readTopLevelYamlValue(frontmatter, key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function parseYamlList(
+  frontmatter: string,
+  keys: string[]
+): string[] | undefined {
+  const value = readFirstYamlValue(frontmatter, keys);
+  if (!value) return undefined;
+
+  const normalized =
+    value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
+
+  const items = normalized
+    .split(/\n|,/)
+    .map((item) => stripYamlQuotes(item.replace(/^-\s*/, '').trim()))
+    .filter(Boolean);
+
+  return items.length > 0 ? items : undefined;
+}
+
+function parseYamlBoolean(
+  frontmatter: string,
+  keys: string[]
+): boolean | undefined {
+  const value = readFirstYamlValue(frontmatter, keys);
+  if (value === undefined) return undefined;
+  if (/^(true|yes|1)$/i.test(value)) return true;
+  if (/^(false|no|0)$/i.test(value)) return false;
+  return undefined;
 }
 
 /**
@@ -49,53 +150,36 @@ export interface SkillsConfig {
  */
 function parseSkillFrontmatter(content: string): SkillMetadata | null {
   // Match YAML frontmatter between --- markers
-  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!frontmatterMatch) {
     return null;
   }
 
   const frontmatter = frontmatterMatch[1];
   const metadata: SkillMetadata = {
-    name: '',
-    description: '',
+    name: readTopLevelYamlValue(frontmatter, 'name') || '',
+    description: readTopLevelYamlValue(frontmatter, 'description') || '',
+    license: readTopLevelYamlValue(frontmatter, 'license'),
+    author: readTopLevelYamlValue(frontmatter, 'author'),
+    version: readTopLevelYamlValue(frontmatter, 'version'),
+    argumentHint: readFirstYamlValue(frontmatter, [
+      'argument-hint',
+      'argument_hint',
+    ]),
+    whenToUse: readFirstYamlValue(frontmatter, [
+      'when-to-use',
+      'when_to_use',
+      'whenToUse',
+    ]),
+    allowedTools: parseYamlList(frontmatter, [
+      'allowed-tools',
+      'allowed_tools',
+    ]),
+    userInvocable: parseYamlBoolean(frontmatter, [
+      'user-invocable',
+      'user_invocable',
+    ]),
   };
-
-  // Simple YAML parsing for common fields
-  const lines = frontmatter.split('\n');
-  for (const line of lines) {
-    const colonIndex = line.indexOf(':');
-    if (colonIndex === -1) continue;
-
-    const key = line.slice(0, colonIndex).trim();
-    let value = line.slice(colonIndex + 1).trim();
-
-    // Remove quotes if present
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-
-    switch (key) {
-      case 'name':
-        metadata.name = value;
-        break;
-      case 'description':
-        metadata.description = value;
-        break;
-      case 'license':
-        metadata.license = value;
-        break;
-      case 'author':
-        metadata.author = value;
-        break;
-      case 'version':
-        metadata.version = value;
-        break;
-      case 'argument-hint':
-        metadata.argumentHint = value;
-        break;
-    }
-  }
 
   return metadata.name ? metadata : null;
 }
@@ -107,9 +191,7 @@ async function loadSkillFromDir(skillDir: string): Promise<LoadedSkill | null> {
   try {
     // Check for SKILL.md (case-insensitive)
     const files = await fs.readdir(skillDir);
-    const skillFile = files.find(
-      (f) => f.toLowerCase() === 'skill.md'
-    );
+    const skillFile = files.find((f) => f.toLowerCase() === 'skill.md');
 
     if (!skillFile) {
       return null;
@@ -200,6 +282,56 @@ export async function loadSkills(
   return skills;
 }
 
+function expandHomePath(inputPath: string): string {
+  if (inputPath === '~') return homedir();
+  if (inputPath.startsWith('~/') || inputPath.startsWith('~\\')) {
+    return join(homedir(), inputPath.slice(2));
+  }
+  return inputPath;
+}
+
+function normalizeComparablePath(inputPath: string): string {
+  return expandHomePath(inputPath)
+    .replace(/[\\/]+$/, '')
+    .toLowerCase();
+}
+
+function getConfiguredSkillsDirs(skillsConfig?: SkillsConfig): string[] {
+  const userDir = getClaudeSkillsDir();
+  const appDir = getWorkanySkillsDir();
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+
+  const addDir = (dir: string) => {
+    const expanded = expandHomePath(dir);
+    const comparable = normalizeComparablePath(expanded);
+    if (seen.has(comparable)) return;
+    seen.add(comparable);
+    dirs.push(expanded);
+  };
+
+  if (!skillsConfig || skillsConfig.userDirEnabled !== false) {
+    addDir(userDir);
+  }
+  if (!skillsConfig || skillsConfig.appDirEnabled !== false) {
+    addDir(appDir);
+  }
+
+  if (skillsConfig?.skillsPath) {
+    const customPath = expandHomePath(skillsConfig.skillsPath);
+    const isDefaultDir =
+      normalizeComparablePath(customPath) ===
+        normalizeComparablePath(userDir) ||
+      normalizeComparablePath(customPath) === normalizeComparablePath(appDir);
+
+    if (!isDefaultDir) {
+      addDir(customPath);
+    }
+  }
+
+  return dirs;
+}
+
 /**
  * Get skill names for display (useful for logging and UI)
  */
@@ -210,7 +342,10 @@ export function getSkillNames(skills: LoadedSkill[]): string[] {
 /**
  * Find a specific skill by name
  */
-export function findSkill(skills: LoadedSkill[], name: string): LoadedSkill | undefined {
+export function findSkill(
+  skills: LoadedSkill[],
+  name: string
+): LoadedSkill | undefined {
   return skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
 }
 
@@ -315,7 +450,7 @@ export async function loadAllSkills(
   }
 
   const skills: LoadedSkill[] = [];
-  const dirs = [getClaudeSkillsDir(), getWorkanySkillsDir()];
+  const dirs = getConfiguredSkillsDirs(skillsConfig);
   const loadedNames = new Set<string>();
 
   for (const skillsDir of dirs) {
@@ -328,9 +463,10 @@ export async function loadAllSkills(
 
         const skillDir = join(skillsDir, entry.name);
         const skill = await loadSkillFromDir(skillDir);
-        if (skill && !loadedNames.has(skill.name)) {
+        const normalizedName = skill?.name.toLowerCase();
+        if (skill && normalizedName && !loadedNames.has(normalizedName)) {
           skills.push(skill);
-          loadedNames.add(skill.name);
+          loadedNames.add(normalizedName);
           console.log(`[Skills] Loaded skill: ${skill.name} from ${skillsDir}`);
         }
       }
@@ -341,6 +477,94 @@ export async function loadAllSkills(
 
   if (skills.length > 0) {
     console.log(`[Skills] Total loaded: ${skills.length} skill(s)`);
+  }
+
+  return skills;
+}
+
+function createSkillPrompt(skill: LoadedSkill, args: string): string {
+  const argsText = args.trim();
+  const sections = [
+    `# Skill: ${skill.name}`,
+    `Skill directory: ${skill.path}`,
+    'If the instructions reference $SKILL_DIR, use the skill directory path above.',
+  ];
+
+  if (argsText) {
+    sections.push(`## Invocation Arguments\n${argsText}`);
+  }
+
+  sections.push(`## SKILL.md\n${skill.content}`);
+  return sections.join('\n\n');
+}
+
+function toSdkSkillDefinition(skill: LoadedSkill): SkillDefinition {
+  return {
+    name: skill.name,
+    description:
+      skill.metadata.description || `Skill loaded from ${skill.path}`,
+    whenToUse: skill.metadata.whenToUse,
+    argumentHint: skill.metadata.argumentHint,
+    allowedTools: skill.metadata.allowedTools,
+    userInvocable: skill.metadata.userInvocable !== false,
+    async getPrompt(args) {
+      return [
+        {
+          type: 'text',
+          text: createSkillPrompt(skill, args),
+        },
+      ];
+    },
+  };
+}
+
+function clearRegisteredFileSkills(): void {
+  for (const skillName of registeredFileSkillNames) {
+    unregisterSkill(skillName);
+
+    const replacedSkill = replacedSdkSkills.get(skillName);
+    if (replacedSkill) {
+      registerSkill(replacedSkill);
+    }
+  }
+
+  registeredFileSkillNames.clear();
+  replacedSdkSkills.clear();
+}
+
+/**
+ * Synchronize file-based skills into the SDK's global skill registry.
+ *
+ * The SDK registers bundled skills per agent construction, while WorkAny skills
+ * live on disk. This bridge makes ~/.claude/skills and ~/.workany/skills
+ * invocable through the SDK Skill tool.
+ */
+export async function syncSdkSkills(
+  skillsConfig?: SkillsConfig
+): Promise<LoadedSkill[]> {
+  clearRegisteredFileSkills();
+
+  // Ensure SDK bundled skills are present before applying file skill overrides.
+  initBundledSkills();
+
+  if (skillsConfig && !skillsConfig.enabled) {
+    console.log('[Skills] Skills disabled, SDK registry sync skipped');
+    return [];
+  }
+
+  const skills = await loadAllSkills(skillsConfig);
+  for (const skill of skills) {
+    const existingSkill = getSkill(skill.name);
+    if (existingSkill) {
+      replacedSdkSkills.set(skill.name, existingSkill);
+    }
+
+    registerSkill(toSdkSkillDefinition(skill));
+    registeredFileSkillNames.add(skill.name);
+  }
+
+  if (skills.length > 0) {
+    console.log(`[Skills] Registered ${skills.length} file skill(s) with SDK`);
   }
 
   return skills;

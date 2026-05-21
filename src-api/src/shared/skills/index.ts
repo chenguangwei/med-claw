@@ -8,6 +8,7 @@
 export {
   loadSkills,
   loadAllSkills,
+  syncSdkSkills,
   installBuiltinSkills,
   getSkillsPath,
   getSkillNames,
