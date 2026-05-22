@@ -301,18 +301,10 @@ export default {
   dataCancel: '取消',
 
   // About
-  aiPlatform: '桌面通用 Agent',
+  aiPlatform: 'unisound',
   version: '版本',
   build: '构建',
   author: '作者',
   copyright: '版权',
   license: '许可证',
-  website: '官网',
-  viewSource: '查看源码',
-  joinCommunity: '加入社区',
-  followUs: '关注我们',
-  reportIssue: '反馈问题',
-  builtWith: '部分组件使用',
-  built: '构建',
-  downloadNewVersion: '下载新版本',
 };

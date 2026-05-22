@@ -24,9 +24,13 @@ import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import {
   ArrowRight,
+  BadgeDollarSign,
   BrainCircuit,
+  BriefcaseBusiness,
   Calculator,
   Calendar,
+  ChevronLeft,
+  ChevronRight,
   CircleCheck,
   ClipboardList,
   Clock,
@@ -95,6 +99,156 @@ interface LeftSidebarProps {
   onToggleFavorite?: (taskId: string, favorite: boolean) => void;
   onRenameTask?: (taskId: string, newTitle: string) => void;
   runningTaskIds?: string[];
+}
+
+interface SidebarAssistant {
+  id: string;
+  name: string;
+  initial: string;
+  capabilityId?: string | null;
+  source?: 'primary' | 'built-in' | 'custom';
+  description?: string;
+  skills?: string[];
+  mcps?: string[];
+}
+
+const CUSTOM_ASSISTANTS_STORAGE_KEY = 'workany:custom-assistants';
+
+const BUILT_IN_ASSISTANTS = [
+  {
+    id: 'sales',
+    name: '销售助手',
+    capabilityId: 'sales',
+    icon: BadgeDollarSign,
+    description: '产品条款、产品比对、渠道推荐、核保和保单查询。',
+  },
+  {
+    id: 'meeting',
+    name: '会议助手',
+    capabilityId: 'meeting',
+    icon: Calendar,
+    description: '会议纪要、待办提炼、日程梳理和参会材料整理。',
+  },
+  {
+    id: 'office',
+    name: '办公助手',
+    capabilityId: 'office',
+    icon: BriefcaseBusiness,
+    description: '日常办公写作、表格处理、流程材料和事务跟进。',
+  },
+  {
+    id: 'document-review',
+    name: '文档审核',
+    capabilityId: 'document-review',
+    icon: ShieldCheck,
+    description: '合同、方案、制度和业务文档的风险与格式审核。',
+  },
+  {
+    id: 'file',
+    name: '文件整理助手',
+    capabilityId: null,
+    icon: FolderOpen,
+    description: '文件归类、命名整理、资料检索和归档建议。',
+  },
+] as const;
+
+const ASSISTANT_SKILL_OPTIONS = [
+  {
+    id: 'terms',
+    label: '条款检索',
+    description: '读取产品条款并抽取责任、等待期和免赔额。',
+  },
+  {
+    id: 'compare',
+    label: '产品比对',
+    description: '按保障责任、适用客群和销售口径做结构化对比。',
+  },
+  {
+    id: 'writing',
+    label: '话术生成',
+    description: '把业务规则转换成可直接发送给客户的表达。',
+  },
+  {
+    id: 'review',
+    label: '文档审核',
+    description: '检查文档风险、遗漏项和格式一致性。',
+  },
+  {
+    id: 'underwriting',
+    label: '核保咨询',
+    description: '识别健康告知、异常指标和需补充的核保材料。',
+  },
+  {
+    id: 'ops-support',
+    label: '运维排障',
+    description: '梳理系统报错、权限问题和工单处理上下文。',
+  },
+] as const;
+
+const ASSISTANT_MCP_OPTIONS = [
+  {
+    id: 'knowledge-base',
+    label: '知识库',
+    description: '连接产品资料、销售手册和内部 FAQ。',
+  },
+  {
+    id: 'policy-system',
+    label: '保单系统',
+    description: '查询客户、保单、续保和承保状态。',
+  },
+  {
+    id: 'crm',
+    label: '客户中心',
+    description: '读取客户画像、渠道和跟进记录。',
+  },
+  {
+    id: 'ops',
+    label: '运维工单',
+    description: '创建排障工单并补充必要上下文。',
+  },
+  {
+    id: 'proposal-engine',
+    label: '建议书系统',
+    description: '生成方案建议书并校验产品、费率和投保规则。',
+  },
+  {
+    id: 'channel-product',
+    label: '渠道产品库',
+    description: '按代理人渠道读取可售、停售和权限内产品。',
+  },
+] as const;
+
+const ASSISTANT_OPTION_PAGE_SIZE = 4;
+
+function filterAssistantOptions<
+  T extends { label: string; description: string },
+>(options: readonly T[], query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return options;
+
+  return options.filter((option) => {
+    const searchableText =
+      `${option.label} ${option.description}`.toLowerCase();
+    return searchableText.includes(normalizedQuery);
+  });
+}
+
+function dispatchAssistantSelection(assistant: SidebarAssistant) {
+  window.dispatchEvent(
+    new CustomEvent('workany:assistant-selected', {
+      detail: {
+        assistantId: assistant.id,
+        assistantName: assistant.name,
+        capabilityId: assistant.capabilityId ?? null,
+        skills: assistant.skills ?? [],
+        mcps: assistant.mcps ?? [],
+      },
+    })
+  );
+}
+
+function getInitial(name: string) {
+  return name.trim().slice(0, 1).toUpperCase() || 'A';
 }
 
 async function openPathInSystem(targetPath: string) {
@@ -496,7 +650,6 @@ export function LeftSidebar({
               onToggleFavorite={handleToggleFavorite}
               onRenameTask={handleRenameClick}
               onDeleteTask={handleDeleteClick}
-              onNewTask={() => navigate('/')}
               t={t}
             />
           )}
@@ -662,9 +815,7 @@ function SettingsInlinePanel({
         <h2 className="text-foreground text-base font-semibold">{label}</h2>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="settings-inline-panel p-4 [&_.grid-cols-2]:grid-cols-1 [&_.max-w-md]:max-w-full [&_.p-6]:p-0 [&_.px-6]:px-0 [&_.sticky]:static [&_.sticky]:flex-col [&_.sticky]:items-stretch [&_.sticky]:gap-3 [&_.w-64]:w-full">
-          {category === 'mcp' && null}
-        </div>
+        <div className="settings-inline-panel p-4 [&_.grid-cols-2]:grid-cols-1 [&_.max-w-md]:max-w-full [&_.p-6]:p-0 [&_.px-6]:px-0 [&_.sticky]:static [&_.sticky]:flex-col [&_.sticky]:items-stretch [&_.sticky]:gap-3 [&_.w-64]:w-full" />
       </div>
     </div>
   );
@@ -1409,7 +1560,6 @@ function TaskAssistantPanel({
   onToggleFavorite,
   onRenameTask,
   onDeleteTask,
-  onNewTask,
   t,
 }: {
   tasks: Task[];
@@ -1420,65 +1570,633 @@ function TaskAssistantPanel({
   onToggleFavorite: (task: Task, e: React.MouseEvent) => void;
   onRenameTask: (task: Task, e: React.MouseEvent) => void;
   onDeleteTask: (taskId: string, e: React.MouseEvent) => void;
-  onNewTask: () => void;
   t: ReturnType<typeof useLanguage>['t'];
 }) {
+  const [assistants, setAssistants] = useState<SidebarAssistant[]>(() => {
+    const primaryAssistant = {
+      id: 'primary',
+      name: t.nav.primaryAssistant,
+      initial: 'W',
+    };
+
+    try {
+      const saved = JSON.parse(
+        window.localStorage.getItem(CUSTOM_ASSISTANTS_STORAGE_KEY) || '[]'
+      );
+      if (!Array.isArray(saved)) return [primaryAssistant];
+
+      const customAssistants = saved.filter(
+        (assistant): assistant is SidebarAssistant =>
+          typeof assistant?.id === 'string' &&
+          typeof assistant?.name === 'string' &&
+          typeof assistant?.initial === 'string' &&
+          assistant.id !== 'primary'
+      );
+
+      return [primaryAssistant, ...customAssistants];
+    } catch {
+      return [primaryAssistant];
+    }
+  });
+  const [activeAssistantId, setActiveAssistantId] = useState('primary');
+  const [createAssistantOpen, setCreateAssistantOpen] = useState(false);
+  const [assistantName, setAssistantName] = useState('');
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([
+    'writing',
+  ]);
+  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([
+    'knowledge-base',
+  ]);
+  const [skillPage, setSkillPage] = useState(0);
+  const [mcpPage, setMcpPage] = useState(0);
+  const [skillSearchQuery, setSkillSearchQuery] = useState('');
+  const [mcpSearchQuery, setMcpSearchQuery] = useState('');
+  const [assistantNameError, setAssistantNameError] = useState('');
+  const trimmedAssistantName = assistantName.trim();
+  const matchedBuiltInAssistant = BUILT_IN_ASSISTANTS.find(
+    (assistant) => assistant.name === trimmedAssistantName
+  );
+  const showCustomComposer =
+    trimmedAssistantName.length > 0 && !matchedBuiltInAssistant;
+  const filteredSkillOptions = filterAssistantOptions(
+    ASSISTANT_SKILL_OPTIONS,
+    skillSearchQuery
+  );
+  const filteredMcpOptions = filterAssistantOptions(
+    ASSISTANT_MCP_OPTIONS,
+    mcpSearchQuery
+  );
+  const skillPageCount = Math.max(
+    1,
+    Math.ceil(filteredSkillOptions.length / ASSISTANT_OPTION_PAGE_SIZE)
+  );
+  const mcpPageCount = Math.max(
+    1,
+    Math.ceil(filteredMcpOptions.length / ASSISTANT_OPTION_PAGE_SIZE)
+  );
+  const visibleSkillOptions = filteredSkillOptions.slice(
+    skillPage * ASSISTANT_OPTION_PAGE_SIZE,
+    (skillPage + 1) * ASSISTANT_OPTION_PAGE_SIZE
+  );
+  const visibleMcpOptions = filteredMcpOptions.slice(
+    mcpPage * ASSISTANT_OPTION_PAGE_SIZE,
+    (mcpPage + 1) * ASSISTANT_OPTION_PAGE_SIZE
+  );
+
+  const resetCreateAssistantForm = () => {
+    setAssistantName('');
+    setSelectedSkillIds(['writing']);
+    setSelectedMcpIds(['knowledge-base']);
+    setSkillPage(0);
+    setMcpPage(0);
+    setSkillSearchQuery('');
+    setMcpSearchQuery('');
+    setAssistantNameError('');
+  };
+
+  const findAssistantByName = (name: string) =>
+    assistants.find((assistant) => assistant.name === name);
+
+  const validateAssistantName = (name: string) => {
+    if (!name.trim()) return '请输入助手名称。';
+    if (findAssistantByName(name.trim()))
+      return '助手名称已存在，请换一个名称。';
+    return '';
+  };
+
+  useEffect(() => {
+    const customAssistants = assistants.filter(
+      (assistant) => assistant.id !== 'primary'
+    );
+    window.localStorage.setItem(
+      CUSTOM_ASSISTANTS_STORAGE_KEY,
+      JSON.stringify(customAssistants)
+    );
+  }, [assistants]);
+
+  const activateAssistant = (assistant: SidebarAssistant) => {
+    setActiveAssistantId(assistant.id);
+    dispatchAssistantSelection(assistant);
+  };
+
+  const addAssistant = (assistant: SidebarAssistant) => {
+    setAssistants((current) => [...current, assistant]);
+    activateAssistant(assistant);
+    resetCreateAssistantForm();
+    setCreateAssistantOpen(false);
+  };
+
+  const handleCreateBuiltInAssistant = (
+    template: (typeof BUILT_IN_ASSISTANTS)[number]
+  ) => {
+    const error = validateAssistantName(template.name);
+    if (error) {
+      setAssistantName(template.name);
+      setAssistantNameError(error);
+      return;
+    }
+
+    const assistant = {
+      id: `assistant-${template.id}-${Date.now()}`,
+      name: template.name,
+      initial: getInitial(template.name),
+      capabilityId: template.capabilityId,
+      source: 'built-in' as const,
+      description: template.description,
+    };
+
+    addAssistant(assistant);
+  };
+
+  const handleCreateAssistant = () => {
+    const trimmed = assistantName.trim();
+    const error = validateAssistantName(trimmed);
+    if (error) {
+      setAssistantNameError(error);
+      return;
+    }
+
+    if (matchedBuiltInAssistant) {
+      handleCreateBuiltInAssistant(matchedBuiltInAssistant);
+      return;
+    }
+
+    const skills = ASSISTANT_SKILL_OPTIONS.filter((skill) =>
+      selectedSkillIds.includes(skill.id)
+    ).map((skill) => skill.label);
+    const mcps = ASSISTANT_MCP_OPTIONS.filter((mcp) =>
+      selectedMcpIds.includes(mcp.id)
+    ).map((mcp) => mcp.label);
+
+    addAssistant({
+      id: `assistant-${Date.now()}`,
+      name: trimmed,
+      initial: getInitial(trimmed),
+      capabilityId: null,
+      source: 'custom',
+      description:
+        skills.length || mcps.length
+          ? `已配置 ${skills.length} 项技能、${mcps.length} 项 MCP 能力`
+          : '未绑定额外技能或 MCP，按通用助手创建。',
+      skills,
+      mcps,
+    });
+  };
+
+  const toggleSkill = (skillId: string) => {
+    setSelectedSkillIds((current) =>
+      current.includes(skillId)
+        ? current.filter((id) => id !== skillId)
+        : [...current, skillId]
+    );
+  };
+
+  const toggleMcp = (mcpId: string) => {
+    setSelectedMcpIds((current) =>
+      current.includes(mcpId)
+        ? current.filter((id) => id !== mcpId)
+        : [...current, mcpId]
+    );
+  };
+
+  const handleDeleteAssistant = (
+    assistant: SidebarAssistant,
+    event: React.MouseEvent
+  ) => {
+    event.stopPropagation();
+    if (assistant.id === 'primary') return;
+
+    const nextAssistants = assistants.filter(
+      (item) => item.id !== assistant.id
+    );
+    const fallbackAssistant =
+      nextAssistants.find((item) => item.id === 'primary') || nextAssistants[0];
+
+    setAssistants(nextAssistants);
+    if (activeAssistantId === assistant.id && fallbackAssistant) {
+      activateAssistant(fallbackAssistant);
+    }
+  };
+
+  const goToOptionPage = (
+    type: 'skill' | 'mcp',
+    direction: 'previous' | 'next'
+  ) => {
+    if (type === 'skill') {
+      setSkillPage((current) =>
+        direction === 'previous'
+          ? Math.max(0, current - 1)
+          : Math.min(skillPageCount - 1, current + 1)
+      );
+      return;
+    }
+
+    setMcpPage((current) =>
+      direction === 'previous'
+        ? Math.max(0, current - 1)
+        : Math.min(mcpPageCount - 1, current + 1)
+    );
+  };
+
   return (
-    <div className="border-sidebar-border bg-background/50 flex h-full min-w-0 flex-1 flex-col border-l">
-      <div className="border-sidebar-border shrink-0 border-b px-3 py-4">
-        <p className="text-muted-foreground px-1 text-sm font-medium">
-          {t.nav.myAssistant}
-        </p>
-        <div className="mt-4 space-y-2">
-          <button className="flex h-12 w-full cursor-pointer items-center gap-2 rounded-xl border border-orange-200 bg-gradient-to-br from-orange-50 via-white to-orange-100/70 px-3 text-left text-sm font-semibold text-orange-600 shadow-sm">
-            <div className="flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-amber-400 text-xs font-bold text-white shadow-sm">
-              W
-            </div>
-            <span className="min-w-0 flex-1 truncate">
-              {t.nav.primaryAssistant}
-            </span>
-            <CircleCheck className="size-5 shrink-0 fill-orange-500 text-white" />
-          </button>
-          <button
-            onClick={onNewTask}
-            className="border-border hover:bg-accent bg-background flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-colors"
-          >
-            <span className="text-lg leading-none">+</span>
-            {t.nav.createAssistant}
-          </button>
+    <>
+      <div className="border-sidebar-border bg-background/50 flex h-full min-w-0 flex-1 flex-col border-l">
+        <div className="border-sidebar-border shrink-0 border-b px-3 py-4">
+          <p className="text-muted-foreground px-1 text-sm font-medium">
+            {t.nav.myAssistant}
+          </p>
+          <div className="mt-4 space-y-2">
+            {assistants.map((assistant) => {
+              const active = activeAssistantId === assistant.id;
+
+              return (
+                <div
+                  key={assistant.id}
+                  className={cn(
+                    'group flex min-h-12 w-full items-center gap-1 rounded-xl border p-1 shadow-sm transition-colors',
+                    active
+                      ? 'border-orange-200 bg-gradient-to-br from-orange-50 via-white to-orange-100/70 text-orange-600'
+                      : 'border-border bg-background text-sidebar-foreground hover:bg-accent'
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => activateAssistant(assistant)}
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left"
+                  >
+                    <div
+                      className={cn(
+                        'flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold shadow-sm',
+                        active
+                          ? 'bg-gradient-to-br from-orange-500 to-amber-400 text-white'
+                          : 'bg-muted text-muted-foreground'
+                      )}
+                    >
+                      {assistant.initial}
+                    </div>
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      <span className="block truncate">{assistant.name}</span>
+                      {assistant.description && (
+                        <span className="text-muted-foreground mt-0.5 block truncate text-xs font-normal">
+                          {assistant.description}
+                        </span>
+                      )}
+                    </span>
+                    {active && (
+                      <CircleCheck className="size-5 shrink-0 fill-orange-500 text-white" />
+                    )}
+                  </button>
+                  {assistant.id !== 'primary' && (
+                    <button
+                      type="button"
+                      aria-label={`删除${assistant.name}`}
+                      title="删除助手"
+                      onClick={(event) =>
+                        handleDeleteAssistant(assistant, event)
+                      }
+                      className={cn(
+                        'flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500 focus:opacity-100',
+                        active && 'opacity-100'
+                      )}
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setCreateAssistantOpen(true)}
+              className="border-border hover:bg-accent bg-background flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-colors"
+            >
+              <span className="text-lg leading-none">+</span>
+              {t.nav.createAssistant}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col px-3 py-4">
+          <p className="text-muted-foreground px-1 text-sm font-medium">
+            {t.nav.taskRecords}
+          </p>
+          <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+            {tasks.length === 0 ? (
+              <p className="text-muted-foreground px-1 py-6 text-center text-sm">
+                {t.nav.noTasksYet}
+              </p>
+            ) : (
+              tasks
+                .slice(0, 12)
+                .map((task) => (
+                  <TaskRecordItem
+                    key={task.id}
+                    task={task}
+                    active={currentTaskId === task.id}
+                    loading={loadingTaskId === task.id}
+                    running={runningTaskIds.includes(task.id)}
+                    onSelectTask={onSelectTask}
+                    onToggleFavorite={onToggleFavorite}
+                    onRenameTask={onRenameTask}
+                    onDeleteTask={onDeleteTask}
+                    t={t}
+                  />
+                ))
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col px-3 py-4">
-        <p className="text-muted-foreground px-1 text-sm font-medium">
-          {t.nav.taskRecords}
-        </p>
-        <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
-          {tasks.length === 0 ? (
-            <p className="text-muted-foreground px-1 py-6 text-center text-sm">
-              {t.nav.noTasksYet}
-            </p>
-          ) : (
-            tasks
-              .slice(0, 12)
-              .map((task) => (
-                <TaskRecordItem
-                  key={task.id}
-                  task={task}
-                  active={currentTaskId === task.id}
-                  loading={loadingTaskId === task.id}
-                  running={runningTaskIds.includes(task.id)}
-                  onSelectTask={onSelectTask}
-                  onToggleFavorite={onToggleFavorite}
-                  onRenameTask={onRenameTask}
-                  onDeleteTask={onDeleteTask}
-                  t={t}
-                />
-              ))
-          )}
-        </div>
-      </div>
-    </div>
+      <Dialog
+        open={createAssistantOpen}
+        onOpenChange={(open) => {
+          setCreateAssistantOpen(open);
+          if (!open) {
+            resetCreateAssistantForm();
+          }
+        }}
+      >
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">
+              {t.nav.createAssistant}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5 py-2">
+            <div>
+              <label className="text-sm font-semibold">助手名称</label>
+              <input
+                type="text"
+                value={assistantName}
+                onChange={(event) => {
+                  setAssistantName(event.target.value);
+                  setAssistantNameError('');
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    handleCreateAssistant();
+                  }
+                }}
+                autoFocus
+                placeholder="例如：销售助手"
+                aria-invalid={!!assistantNameError}
+                aria-describedby={
+                  assistantNameError ? 'assistant-name-error' : undefined
+                }
+                className={cn(
+                  'border-border focus:border-primary focus:ring-primary/30 mt-2 h-14 w-full rounded-xl border bg-transparent px-4 text-lg outline-none focus:ring-2',
+                  assistantNameError &&
+                    'border-red-300 focus:border-red-400 focus:ring-red-100'
+                )}
+              />
+              {assistantNameError && (
+                <p
+                  id="assistant-name-error"
+                  role="alert"
+                  className="mt-2 text-sm font-medium text-red-500"
+                >
+                  {assistantNameError}
+                </p>
+              )}
+              <p className="text-muted-foreground mt-3 text-sm leading-6">
+                创建后会出现在“我的助手”列表中，并自动切换为当前助手。
+              </p>
+            </div>
+
+            {!showCustomComposer ? (
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-base font-extrabold tracking-normal text-slate-950">
+                    内置助手
+                  </p>
+                  <p className="text-muted-foreground text-xs font-semibold">
+                    点击后立即创建并选中对应能力块
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {BUILT_IN_ASSISTANTS.map((assistant) => {
+                    const Icon = assistant.icon;
+
+                    return (
+                      <button
+                        key={assistant.id}
+                        type="button"
+                        onClick={() => handleCreateBuiltInAssistant(assistant)}
+                        className="border-border hover:border-primary/40 hover:bg-primary/5 group bg-background flex min-h-24 cursor-pointer items-start gap-3 rounded-xl border p-3 text-left transition-colors"
+                      >
+                        <span className="bg-primary/10 text-primary group-hover:bg-primary group-hover:text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors">
+                          <Icon className="size-4" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="text-foreground block text-base font-extrabold tracking-normal">
+                            {assistant.name}
+                          </span>
+                          <span className="text-muted-foreground mt-1 block text-xs leading-5 font-medium">
+                            {assistant.description}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-primary text-lg font-extrabold tracking-normal">
+                        技能选择
+                      </p>
+                      <p className="text-muted-foreground mt-1 text-xs font-semibold">
+                        可多选，也可以不选择
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-primary text-xs font-bold">
+                        {skillPage + 1} / {skillPageCount}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => goToOptionPage('skill', 'previous')}
+                        disabled={skillPage === 0}
+                        className="border-primary/20 text-primary hover:bg-primary/10 flex size-8 cursor-pointer items-center justify-center rounded-lg border transition disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="上一页技能"
+                      >
+                        <ChevronLeft className="size-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => goToOptionPage('skill', 'next')}
+                        disabled={skillPage >= skillPageCount - 1}
+                        className="border-primary/20 text-primary hover:bg-primary/10 flex size-8 cursor-pointer items-center justify-center rounded-lg border transition disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="下一页技能"
+                      >
+                        <ChevronRight className="size-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="relative mb-3">
+                    <label htmlFor="assistant-skill-search" className="sr-only">
+                      搜索技能
+                    </label>
+                    <Search className="text-primary/60 absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+                    <input
+                      id="assistant-skill-search"
+                      type="search"
+                      value={skillSearchQuery}
+                      onChange={(event) => {
+                        setSkillSearchQuery(event.target.value);
+                        setSkillPage(0);
+                      }}
+                      placeholder="搜索技能名称或说明"
+                      className="border-primary/20 bg-primary/5 text-foreground focus:border-primary/50 focus:bg-background focus:ring-primary/15 h-10 w-full rounded-xl border pr-3 pl-9 text-sm font-medium transition outline-none placeholder:text-slate-400 focus:ring-2"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {visibleSkillOptions.length === 0 ? (
+                      <div className="border-primary/25 bg-primary/5 text-primary col-span-2 flex min-h-24 items-center justify-center rounded-xl border border-dashed text-sm font-bold">
+                        没有匹配的技能
+                      </div>
+                    ) : (
+                      visibleSkillOptions.map((skill) => {
+                        const selected = selectedSkillIds.includes(skill.id);
+
+                        return (
+                          <button
+                            key={skill.id}
+                            type="button"
+                            onClick={() => toggleSkill(skill.id)}
+                            className={cn(
+                              'min-h-24 cursor-pointer rounded-xl border p-3 text-left text-sm transition-colors',
+                              selected
+                                ? 'border-primary/40 bg-primary/10 text-primary'
+                                : 'border-border bg-background hover:border-primary/30 hover:bg-primary/5'
+                            )}
+                          >
+                            <span className="block text-base font-extrabold tracking-normal">
+                              {skill.label}
+                            </span>
+                            <span className="text-muted-foreground mt-1.5 block text-xs leading-5 font-semibold">
+                              {skill.description}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-primary text-lg font-extrabold tracking-normal">
+                        AI 能力广场 / MCP 选择
+                      </p>
+                      <p className="text-muted-foreground mt-1 text-xs font-semibold">
+                        作为该助手的可用工具范围
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-primary text-xs font-bold">
+                        {mcpPage + 1} / {mcpPageCount}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => goToOptionPage('mcp', 'previous')}
+                        disabled={mcpPage === 0}
+                        className="border-primary/20 text-primary hover:bg-primary/10 flex size-8 cursor-pointer items-center justify-center rounded-lg border transition disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="上一页 MCP 能力"
+                      >
+                        <ChevronLeft className="size-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => goToOptionPage('mcp', 'next')}
+                        disabled={mcpPage >= mcpPageCount - 1}
+                        className="border-primary/20 text-primary hover:bg-primary/10 flex size-8 cursor-pointer items-center justify-center rounded-lg border transition disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="下一页 MCP 能力"
+                      >
+                        <ChevronRight className="size-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="relative mb-3">
+                    <label htmlFor="assistant-mcp-search" className="sr-only">
+                      搜索 AI 能力或 MCP
+                    </label>
+                    <Search className="text-primary/60 absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+                    <input
+                      id="assistant-mcp-search"
+                      type="search"
+                      value={mcpSearchQuery}
+                      onChange={(event) => {
+                        setMcpSearchQuery(event.target.value);
+                        setMcpPage(0);
+                      }}
+                      placeholder="搜索 AI 能力、MCP 或说明"
+                      className="border-primary/20 bg-primary/5 text-foreground focus:border-primary/50 focus:bg-background focus:ring-primary/15 h-10 w-full rounded-xl border pr-3 pl-9 text-sm font-medium transition outline-none placeholder:text-slate-400 focus:ring-2"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {visibleMcpOptions.length === 0 ? (
+                      <div className="border-primary/25 bg-primary/5 text-primary col-span-2 flex min-h-24 items-center justify-center rounded-xl border border-dashed text-sm font-bold">
+                        没有匹配的 AI 能力或 MCP
+                      </div>
+                    ) : (
+                      visibleMcpOptions.map((mcp) => {
+                        const selected = selectedMcpIds.includes(mcp.id);
+
+                        return (
+                          <button
+                            key={mcp.id}
+                            type="button"
+                            onClick={() => toggleMcp(mcp.id)}
+                            className={cn(
+                              'min-h-24 cursor-pointer rounded-xl border p-3 text-left text-sm transition-colors',
+                              selected
+                                ? 'border-primary/40 bg-primary/10 text-primary'
+                                : 'border-border bg-background hover:border-primary/30 hover:bg-primary/5'
+                            )}
+                          >
+                            <span className="block text-base font-extrabold tracking-normal">
+                              {mcp.label}
+                            </span>
+                            <span className="text-muted-foreground mt-1.5 block text-xs leading-5 font-semibold">
+                              {mcp.description}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => {
+                setCreateAssistantOpen(false);
+                resetCreateAssistantForm();
+              }}
+              className="border-border hover:bg-accent rounded-lg border px-4 py-2 text-sm transition-colors"
+            >
+              {t.common.cancel}
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateAssistant}
+              disabled={!assistantName.trim() || !!assistantNameError}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg px-4 py-2 text-sm transition-colors disabled:opacity-50"
+            >
+              {t.common.confirm}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

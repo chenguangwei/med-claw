@@ -6,11 +6,7 @@ import { SetupGuard } from '@/components/setup-guard';
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: (
-      <SetupGuard>
-        <HomePage />
-      </SetupGuard>
-    ),
+    element: <HomePage />,
   },
   {
     path: '/task/:taskId',

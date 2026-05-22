@@ -128,6 +128,14 @@ export interface ChatInputProps {
   categoryTag?: CategoryTag;
   /** Default mode for the mode selector */
   defaultMode?: ChatMode;
+  /** Called when a home capability chip is selected or cleared */
+  onCapabilitySelect?: (capabilityId: string | null) => void;
+  /** Externally selected home capability chip */
+  selectedCapabilityId?: string | null;
+  /** Called when the textarea is clicked */
+  onInputActivate?: () => void;
+  /** Keep selected capability chips after submit */
+  preserveCapabilitiesOnSubmit?: boolean;
 }
 
 // Generate unique ID for attachments
@@ -238,6 +246,10 @@ export function ChatInput({
   onExternalValueConsumed,
   categoryTag,
   defaultMode = 'auto',
+  onCapabilitySelect,
+  selectedCapabilityId,
+  onInputActivate,
+  preserveCapabilitiesOnSubmit = false,
 }: ChatInputProps) {
   const { t } = useLanguage();
   const [value, setValue] = useState('');
@@ -294,6 +306,13 @@ export function ChatInput({
       }, 0);
     }
   }, [externalValue, onExternalValueConsumed]);
+
+  useEffect(() => {
+    if (selectedCapabilityId === undefined) return;
+    setSelectedCapabilityIds(
+      selectedCapabilityId ? [selectedCapabilityId] : []
+    );
+  }, [selectedCapabilityId]);
 
   // Auto focus on mount if autoFocus is true
   useEffect(() => {
@@ -754,21 +773,25 @@ export function ChatInput({
       setValue('');
       setAttachments([]);
       setSelectedSkill(null);
-      setSelectedCapabilityIds([]);
+      if (!preserveCapabilitiesOnSubmit) {
+        setSelectedCapabilityIds([]);
+      }
       await onSubmit(text, messageAttachments, chatMode);
     }
   };
 
-  const selectCapability = useCallback((capabilityId: string) => {
-    setSelectedCapabilityIds([capabilityId]);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-    });
-  }, []);
+  const selectCapability = useCallback(
+    (capabilityId: string) => {
+      setSelectedCapabilityIds([capabilityId]);
+      onCapabilitySelect?.(capabilityId);
+    },
+    [onCapabilitySelect]
+  );
 
   const removeSelectedCapability = useCallback(() => {
     setSelectedCapabilityIds([]);
-  }, []);
+    onCapabilitySelect?.(null);
+  }, [onCapabilitySelect]);
 
   const selectSkill = useCallback((skill: SkillOption) => {
     setSelectedSkill(skill);
@@ -1029,6 +1052,7 @@ export function ChatInput({
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
         onPaste={handlePaste}
+        onClick={onInputActivate}
         placeholder={selectedSkill ? 'Add arguments...' : placeholder}
         className={cn(
           'text-foreground placeholder:text-muted-foreground w-full resize-none border-0 bg-transparent focus:outline-none',

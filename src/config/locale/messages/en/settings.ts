@@ -33,7 +33,8 @@ export default {
   agentRuntime: 'Agent Runtime',
   agentRuntimeDescription: 'The AI agent that executes tasks',
   runtimeCodeAnyAgent: 'CodeAny Agent',
-  runtimeCodeAnyAgentDescription: 'Open-source in-process agent runtime, no CLI binary required',
+  runtimeCodeAnyAgentDescription:
+    'Open-source in-process agent runtime, no CLI binary required',
 
   // Code Environment
   codeEnvironment: 'Code Environment',
@@ -317,18 +318,10 @@ export default {
   dataCancel: 'Cancel',
 
   // About
-  aiPlatform: 'Desktop Universal Agent',
+  aiPlatform: 'unisound',
   version: 'Version',
   build: 'Build',
   author: 'Author',
   copyright: 'Copyright',
   license: 'License',
-  website: 'Website',
-  viewSource: 'View Source',
-  joinCommunity: 'Join Community',
-  followUs: 'Follow Us',
-  reportIssue: 'Report Issue',
-  builtWith: 'Some components built with',
-  built: '',
-  downloadNewVersion: 'Upgrade',
 };
