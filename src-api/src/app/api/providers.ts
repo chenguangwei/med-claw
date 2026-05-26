@@ -53,10 +53,6 @@ function formatProviderMetadata(
   }));
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown error';
-}
-
 // ============================================================================
 // Routes
 // ============================================================================
@@ -140,10 +136,12 @@ providersRoutes.post('/sandbox/switch', async (c) => {
   const manager = getProviderManager();
   await manager.switchSandboxProvider(body.type, body.config);
 
-  getConfigLoader().updateFromSettings({
+  const configLoader = getConfigLoader();
+  configLoader.updateFromSettings({
     sandboxProvider: body.type,
     sandboxConfig: body.config,
   });
+  await configLoader.saveToFile();
 
   return c.json({
     success: true,
@@ -220,10 +218,12 @@ providersRoutes.post('/agents/switch', async (c) => {
   const manager = getProviderManager();
   await manager.switchAgentProvider(body.type, body.config);
 
-  getConfigLoader().updateFromSettings({
+  const configLoader = getConfigLoader();
+  configLoader.updateFromSettings({
     agentProvider: body.type,
     agentConfig: body.config,
   });
+  await configLoader.saveToFile();
 
   return c.json({
     success: true,
@@ -267,6 +267,7 @@ providersRoutes.post('/settings/sync', async (c) => {
     ...body,
     agentConfig: body.agentConfig,
   });
+  await configLoader.saveToFile();
 
   console.log('[ProvidersAPI] Settings synced:', {
     agentProvider: body.agentProvider,
@@ -299,6 +300,7 @@ interface DetectBody {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  apiType?: 'anthropic-messages' | 'openai-completions';
 }
 
 interface DetectSuccessResponse {
@@ -317,13 +319,27 @@ interface DetectErrorResponse {
 // type DetectResponse = DetectSuccessResponse | DetectErrorResponse;
 
 /**
- * Build API URL from base URL
- * Handles various base URL formats and ensures proper /v1/messages path
+ * Build API URL from base URL.
  */
-function buildApiUrl(baseUrl: string): string {
+function buildApiUrl(
+  baseUrl: string,
+  apiType: 'anthropic-messages' | 'openai-completions'
+): string {
   const normalized = baseUrl.replace(/\/$/, '');
 
-  if (normalized.includes('/messages')) {
+  if (apiType === 'openai-completions') {
+    if (normalized.endsWith('/chat/completions')) {
+      return normalized;
+    }
+
+    if (/\/v\d+(?:\.\d+)?$/.test(normalized)) {
+      return `${normalized}/chat/completions`;
+    }
+
+    return `${normalized}/v1/chat/completions`;
+  }
+
+  if (normalized.endsWith('/messages')) {
     return normalized;
   }
 
@@ -336,7 +352,7 @@ function buildApiUrl(baseUrl: string): string {
 
 /**
  * POST /providers/detect
- * Detect if an OpenAI-compatible API configuration is valid
+ * Detect if an API configuration is valid
  */
 providersRoutes.post('/detect', async (c) => {
   const body = await c.req.json<DetectBody>();
@@ -345,12 +361,14 @@ providersRoutes.post('/detect', async (c) => {
     return c.json({ error: 'baseUrl and apiKey are required' }, 400);
   }
 
-  const apiUrl = buildApiUrl(body.baseUrl);
+  const apiType = body.apiType || 'openai-completions';
+  const apiUrl = buildApiUrl(body.baseUrl, apiType);
   const testModel = body.model || DEFAULT_TEST_MODEL;
 
   console.log('[ProvidersAPI] Detecting API connection:', {
     baseUrl: body.baseUrl,
     apiUrl,
+    apiType,
     model: testModel,
   });
 

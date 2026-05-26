@@ -17,6 +17,10 @@ const logger = createLogger('ChatService');
 
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
 
+type AnthropicMessagesCreate = (
+  params: Record<string, unknown>
+) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+
 // Maximum number of conversation messages to include in API calls
 // to prevent excessive token usage. Each "turn" is a user+assistant pair.
 const MAX_CONTEXT_MESSAGES = 40; // 20 turns × 2 messages
@@ -32,6 +36,23 @@ function resolveConfig(modelConfig?: { apiKey?: string; baseUrl?: string; model?
   const model = modelConfig?.model || DEFAULT_MODEL;
 
   return { apiKey, baseURL, model };
+}
+
+function buildOpenAIChatCompletionsUrl(baseURL: string | undefined): string {
+  if (!baseURL) {
+    return 'https://api.openai.com/v1/chat/completions';
+  }
+
+  const base = baseURL.replace(/\/+$/, '');
+  if (base.endsWith('/chat/completions')) {
+    return base;
+  }
+
+  if (/\/v\d+(?:\.\d+)?$/.test(base)) {
+    return `${base}/chat/completions`;
+  }
+
+  return `${base}/v1/chat/completions`;
 }
 
 function buildSystemPrompt(base: string, language?: string): string {
@@ -62,21 +83,7 @@ async function* runOpenAICompatibleChat(
   model: string,
   abortController?: AbortController
 ): AsyncGenerator<AgentMessage> {
-  // Derive the OpenAI-compatible base URL from the Anthropic-style baseURL
-  // e.g. "https://openrouter.ai/api/v1" -> use as-is, append /chat/completions
-  // Most proxies support /v1/chat/completions
-  let endpoint: string;
-  if (baseURL) {
-    const base = baseURL.replace(/\/+$/, '');
-    // If already ends with /v1, just append /chat/completions
-    if (base.endsWith('/v1')) {
-      endpoint = `${base}/chat/completions`;
-    } else {
-      endpoint = `${base}/v1/chat/completions`;
-    }
-  } else {
-    endpoint = 'https://api.openai.com/v1/chat/completions';
-  }
+  const endpoint = buildOpenAIChatCompletionsUrl(baseURL);
 
   const openaiMessages = [
     { role: 'system', content: systemPrompt },
@@ -148,15 +155,7 @@ async function openAICompatibleCreate(
   model: string,
   maxTokens: number
 ): Promise<string> {
-  let endpoint: string;
-  if (baseURL) {
-    const base = baseURL.replace(/\/+$/, '');
-    endpoint = base.endsWith('/v1')
-      ? `${base}/chat/completions`
-      : `${base}/v1/chat/completions`;
-  } else {
-    endpoint = 'https://api.openai.com/v1/chat/completions';
-  }
+  const endpoint = buildOpenAIChatCompletionsUrl(baseURL);
 
   const openaiMessages = [
     { role: 'system', content: systemPrompt },
@@ -360,8 +359,10 @@ export async function generateTitle(
         thinking: { type: 'disabled' },
       };
 
-      const response = await (client.messages.create as Function)(requestParams);
-      title = (response.content as Array<{ type: string; text?: string }>)
+      const response = await (
+        client.messages.create as unknown as AnthropicMessagesCreate
+      )(requestParams);
+      title = response.content
         .filter((block) => block.type === 'text')
         .map((block) => block.text || '')
         .join('')

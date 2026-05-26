@@ -24,7 +24,7 @@ import { DEFAULT_AGENT_PROVIDER } from '@/config/constants';
 import { nanoid } from 'nanoid';
 
 // ============================================================================
-// Logging - uses shared logger (writes to ~/.workany/logs/workany.log)
+// Logging - uses shared logger (writes to ~/.uniins-claw/logs/uniins-claw.log)
 // ============================================================================
 import { createLogger } from '@/shared/utils/logger';
 
@@ -32,6 +32,7 @@ const serviceLogger = createLogger('AgentService');
 
 // Global agent instance (lazy initialized)
 let globalAgent: IAgent | null = null;
+let globalAgentCacheKey: string | null = null;
 
 // Store active sessions for backward compatibility
 const activeSessions = new Map<string, { abortController: AbortController }>();
@@ -55,28 +56,41 @@ export async function getAgent(config?: Partial<AgentConfig>): Promise<IAgent> {
   const providerManager = getProviderManager();
   const currentAgentConfig = providerManager.getConfig().agent;
   const currentProvider = currentAgentConfig?.type || DEFAULT_AGENT_PROVIDER;
+  const syncedConfig = (currentAgentConfig?.config || {}) as Partial<AgentConfig>;
+  const effectiveConfig = {
+    ...syncedConfig,
+    ...(config || {}),
+  };
 
   console.log('[AgentService] Using current agent provider:', currentProvider);
 
   // If config with API credentials is provided, create a new agent instance
   // Don't cache it to allow different configs per request
-  if (config && (config.apiKey || config.baseUrl || config.model)) {
+  if (
+    config &&
+    (effectiveConfig.apiKey || effectiveConfig.baseUrl || effectiveConfig.model)
+  ) {
     console.log('[AgentService] Creating new agent with custom config:', {
-      hasApiKey: !!config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model,
+      hasApiKey: !!effectiveConfig.apiKey,
+      baseUrl: effectiveConfig.baseUrl,
+      model: effectiveConfig.model,
     });
-    return createAgent({ provider: currentProvider as any, ...config });
+    return createAgent({ provider: currentProvider as any, ...effectiveConfig });
   }
 
   // Use cached global agent for default configuration
-  if (!globalAgent || config) {
+  const nextCacheKey = JSON.stringify({
+    provider: currentProvider,
+    ...effectiveConfig,
+  });
+  if (!globalAgent || globalAgentCacheKey !== nextCacheKey) {
     console.log('[AgentService] Creating agent with current provider:', currentProvider);
     globalAgent = createAgent({
       provider: currentProvider as any,
-      ...(config || {}),
-      workDir: config?.workDir || '~/.workany'
+      ...effectiveConfig,
+      workDir: effectiveConfig.workDir || '~/.uniins-claw'
     });
+    globalAgentCacheKey = nextCacheKey;
   }
   return globalAgent;
 }

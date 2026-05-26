@@ -1,7 +1,7 @@
 /**
  * Application Constants
  *
- * Centralized configuration constants for the WorkAny API.
+ * Centralized configuration constants for the uniins-claw API.
  * All hardcoded values should be defined here for easy management.
  */
 
@@ -13,10 +13,10 @@ import { join } from 'path';
 // ============================================================================
 
 /** Application name */
-export const APP_NAME = 'workany';
+export const APP_NAME = 'uniins-claw';
 
 /** Application data directory name (used in home directory) */
-export const APP_DIR_NAME = '.workany';
+export const APP_DIR_NAME = '.uniins-claw';
 
 /** Claude Code directory name (system config) */
 export const CLAUDE_DIR_NAME = '.claude';
@@ -62,8 +62,8 @@ export const MCP_CONFIG_FILE_NAME = 'mcp.json';
 
 /** Config file search paths (relative) */
 export const CONFIG_SEARCH_PATHS = [
-  './workany.config.json',
-  './config/workany.json',
+  './uniins-claw.config.json',
+  './config/uniins-claw.json',
 ];
 
 // ============================================================================
@@ -119,7 +119,7 @@ export function getHomeDir(): string {
   return homedir();
 }
 
-/** Get WorkAny app data directory */
+/** Get uniins-claw app data directory */
 export function getAppDir(): string {
   return join(homedir(), APP_DIR_NAME);
 }
@@ -129,7 +129,7 @@ export function getClaudeDir(): string {
   return join(homedir(), CLAUDE_DIR_NAME);
 }
 
-/** Get WorkAny skills directory */
+/** Get uniins-claw skills directory */
 export function getWorkanySkillsDir(): string {
   return join(getAppDir(), SKILLS_DIR_NAME);
 }
@@ -142,12 +142,12 @@ export function getClaudeSkillsDir(): string {
 /** Get all skills directories to search */
 export function getAllSkillsDirs(): { name: string; path: string }[] {
   return [
-    { name: 'workany', path: getWorkanySkillsDir() },
+    { name: 'uniins-claw', path: getWorkanySkillsDir() },
     { name: 'claude', path: getClaudeSkillsDir() },
   ];
 }
 
-/** Get WorkAny MCP config path */
+/** Get uniins-claw MCP config path */
 export function getWorkanyMcpConfigPath(): string {
   return join(getAppDir(), MCP_CONFIG_FILE_NAME);
 }
@@ -160,7 +160,7 @@ export function getClaudeSettingsPath(): string {
 /** Get all MCP config paths to search */
 export function getAllMcpConfigPaths(): { name: string; path: string }[] {
   return [
-    { name: 'workany', path: getWorkanyMcpConfigPath() },
+    { name: 'uniins-claw', path: getWorkanyMcpConfigPath() },
     { name: 'claude', path: getClaudeSettingsPath() },
   ];
 }

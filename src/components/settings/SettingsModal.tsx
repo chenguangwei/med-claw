@@ -115,7 +115,7 @@ export function SettingsModal({
             <div className="border-border flex items-center gap-2.5 border-b px-4 py-4">
               <LogoMark className="size-7" />
               <span className="text-foreground text-base font-semibold">
-                U2Claw
+                uniins-claw
               </span>
             </div>
 

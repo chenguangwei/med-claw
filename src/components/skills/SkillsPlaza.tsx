@@ -5,6 +5,7 @@ import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import {
   ChevronDown,
+  CircleCheck,
   ClipboardList,
   Code2,
   Download,
@@ -14,10 +15,13 @@ import {
   Loader2,
   Mail,
   MoreHorizontal,
+  Pencil,
   Plus,
   ReceiptText,
   Search,
   Sparkles,
+  Trash2,
+  X,
 } from 'lucide-react';
 
 import { Switch } from '@/components/settings/components/Switch';
@@ -57,8 +61,30 @@ interface HubSkill {
   tags?: string[];
 }
 
+interface HubValidationState {
+  validCount: number;
+  rejectedCount: number;
+  trustState: 'trusted' | 'partial' | 'invalid';
+}
+
+interface SkillEditorForm {
+  targetDir: string;
+  folderName: string;
+  name: string;
+  description: string;
+  content: string;
+}
+
 const DEFAULT_SKILLS_HUB_URL =
   'https://raw.githubusercontent.com/qufei1993/skills-hub/main/featured-skills.json';
+
+const createEmptySkillEditorForm = (): SkillEditorForm => ({
+  targetDir: '',
+  folderName: '',
+  name: '',
+  description: '',
+  content: '',
+});
 
 const categoryKeys = [
   '全部',
@@ -206,6 +232,59 @@ function parseSkillMdFrontmatter(content: string) {
   };
 }
 
+function validateHubSkillManifest(data: unknown): {
+  skills: HubSkill[];
+  validation: HubValidationState;
+} {
+  const rawSkills =
+    data &&
+    typeof data === 'object' &&
+    Array.isArray((data as { skills?: unknown }).skills)
+      ? (data as { skills: unknown[] }).skills
+      : [];
+  const skills: HubSkill[] = [];
+
+  for (const entry of rawSkills) {
+    if (!entry || typeof entry !== 'object') continue;
+    const skill = entry as Partial<HubSkill>;
+    const slug = String(skill.slug || '').trim();
+    const name = String(skill.name || '').trim();
+    const sourceUrl = String(skill.source_url || '').trim();
+    const isGitHubSkill =
+      /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/tree\/[^/\s]+\/.+/i.test(
+        sourceUrl
+      );
+
+    if (!slug || !name || !isGitHubSkill) continue;
+    skills.push({
+      slug,
+      name,
+      summary: typeof skill.summary === 'string' ? skill.summary : undefined,
+      source_url: sourceUrl,
+      stars: typeof skill.stars === 'number' ? skill.stars : undefined,
+      category: typeof skill.category === 'string' ? skill.category : undefined,
+      tags: Array.isArray(skill.tags)
+        ? skill.tags.filter((tag): tag is string => typeof tag === 'string')
+        : undefined,
+    });
+  }
+
+  const rejectedCount = rawSkills.length - skills.length;
+  return {
+    skills,
+    validation: {
+      validCount: skills.length,
+      rejectedCount,
+      trustState:
+        skills.length === 0
+          ? 'invalid'
+          : rejectedCount === 0
+            ? 'trusted'
+            : 'partial',
+    },
+  };
+}
+
 async function openFolderInSystem(folderPath: string) {
   if (!folderPath) return;
   try {
@@ -321,10 +400,21 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
   const [defaultSkillsPath, setDefaultSkillsPath] = useState('');
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showHubImportDialog, setShowHubImportDialog] = useState(false);
   const [githubUrl, setGithubUrl] = useState('');
   const [hubUrl, setHubUrl] = useState(DEFAULT_SKILLS_HUB_URL);
   const [importingSkillId, setImportingSkillId] = useState<string | null>(null);
+  const [skillEditorOpen, setSkillEditorOpen] = useState(false);
+  const [editingSkillPath, setEditingSkillPath] = useState<string | null>(null);
+  const [skillForm, setSkillForm] = useState(createEmptySkillEditorForm);
+  const [skillSaving, setSkillSaving] = useState(false);
+  const [deletingSkillPath, setDeletingSkillPath] = useState<string | null>(
+    null
+  );
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [hubValidation, setHubValidation] = useState<HubValidationState | null>(
+    null
+  );
 
   useEffect(() => {
     getClaudeSkillsDir().then(setDefaultSkillsPath);
@@ -345,10 +435,10 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
           exists: boolean;
         }[]) {
           if (dir.name === 'claude') dirs.user = dir.path;
-          if (dir.name === 'workany') dirs.app = dir.path;
+          if (dir.name === 'uniins-claw') dirs.app = dir.path;
           if (!dir.exists) continue;
 
-          const source = dir.name === 'claude' ? 'claude' : 'workany';
+          const source = dir.name === 'claude' ? 'claude' : 'uniins-claw';
           const enabled =
             dir.name === 'claude'
               ? settings.skillsUserDirEnabled !== false
@@ -418,10 +508,19 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
         throw new Error(`Hub request failed: ${response.status}`);
       }
       const data = await response.json();
-      const remoteSkills = Array.isArray(data.skills) ? data.skills : [];
-      setHubSkills(remoteSkills.slice(0, 48));
+      const result = validateHubSkillManifest(data);
+      setHubValidation(result.validation);
+      setHubSkills(result.skills.slice(0, 48));
+      if (result.validation.trustState === 'invalid') {
+        setImportStatus('Hub 清单未包含可引入的 GitHub Skill。');
+      } else if (result.validation.rejectedCount > 0) {
+        setImportStatus(
+          `已加载 ${result.validation.validCount} 个可引入技能，过滤 ${result.validation.rejectedCount} 个无效条目。`
+        );
+      }
     } catch (error) {
       console.error('[SkillsPlaza] Failed to load skills hub:', error);
+      setHubValidation(null);
       setImportStatus('加载外部 Skills Hub 失败，请检查地址。');
     } finally {
       setHubLoading(false);
@@ -462,7 +561,11 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
           return;
         }
 
-        setImportStatus(`已引入 ${data.skillName}`);
+        setImportStatus(
+          data.validation?.trustedSource
+            ? `已引入 ${data.skillName}，来源已识别为可信仓库。`
+            : `已引入 ${data.skillName}。请在启用前检查 SKILL.md 内容。`
+        );
         setGithubUrl('');
         setShowImportDialog(false);
         await loadSkills();
@@ -516,6 +619,114 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
   const rightColumnSkills = boardSkills.slice(3, 5);
   const remainingSkills = boardSkills.slice(5);
 
+  const getDefaultSkillTargetDir = () =>
+    skillsDirs.user || defaultSkillsPath || skillsDirs.app;
+
+  const openCreateSkillEditor = () => {
+    setEditingSkillPath(null);
+    setSkillForm({
+      ...createEmptySkillEditorForm(),
+      targetDir: getDefaultSkillTargetDir(),
+    });
+    setImportStatus(null);
+    setSkillEditorOpen(true);
+    setShowAddMenu(false);
+  };
+
+  const openEditSkillEditor = async (skill: SkillInfo) => {
+    setEditingSkillPath(skill.path);
+    setSkillSaving(true);
+    setImportStatus(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/files/skills/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: skill.path }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || '读取 Skill 失败');
+      setSkillForm({
+        targetDir: '',
+        folderName: data.skill.folderName || '',
+        name: data.skill.name || skill.name,
+        description: data.skill.description || skill.description || '',
+        content: data.skill.content || '',
+      });
+      setSkillEditorOpen(true);
+    } catch (error) {
+      setImportStatus(
+        error instanceof Error ? error.message : '读取 Skill 失败'
+      );
+    } finally {
+      setSkillSaving(false);
+    }
+  };
+
+  const saveManagedSkill = async () => {
+    setSkillSaving(true);
+    setImportStatus(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/files/skills`, {
+        method: editingSkillPath ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          editingSkillPath
+            ? {
+                skillPath: editingSkillPath,
+                name: skillForm.name,
+                description: skillForm.description,
+                content: skillForm.content,
+              }
+            : {
+                targetDir: skillForm.targetDir,
+                folderName: skillForm.folderName,
+                name: skillForm.name,
+                description: skillForm.description,
+                content: skillForm.content,
+              }
+        ),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || '保存 Skill 失败');
+      setSkillEditorOpen(false);
+      setImportStatus(editingSkillPath ? 'Skill 已更新。' : 'Skill 已创建。');
+      await loadSkills();
+    } catch (error) {
+      setImportStatus(
+        error instanceof Error ? error.message : '保存 Skill 失败'
+      );
+    } finally {
+      setSkillSaving(false);
+    }
+  };
+
+  const deleteManagedSkill = async (skill: SkillInfo) => {
+    if (
+      !window.confirm(`删除 Skill「${skill.name}」？这会删除本地技能目录。`)
+    ) {
+      return;
+    }
+    setDeletingSkillPath(skill.path);
+    setImportStatus(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/files/skills/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: skill.path }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || '删除 Skill 失败');
+      setImportStatus('Skill 已删除。');
+      await loadSkills();
+    } catch (error) {
+      setImportStatus(
+        error instanceof Error ? error.message : '删除 Skill 失败'
+      );
+    } finally {
+      setDeletingSkillPath(null);
+    }
+  };
+
   const handleAddSkill = () => {
     openFolderInSystem(skillsDirs.user || defaultSkillsPath);
     setShowAddMenu(false);
@@ -524,6 +735,12 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
   const handleOpenImportDialog = () => {
     setShowAddMenu(false);
     setShowImportDialog(true);
+    setImportStatus(null);
+  };
+
+  const handleOpenHubImportDialog = () => {
+    setShowAddMenu(false);
+    setShowHubImportDialog(true);
     setImportStatus(null);
   };
 
@@ -563,7 +780,7 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-white">
-      <div className="relative shrink-0 overflow-hidden border-b border-slate-200 bg-gradient-to-br from-white via-orange-50/30 to-blue-50 px-6 py-8 xl:px-12 xl:py-10">
+      <div className="relative z-20 shrink-0 overflow-visible border-b border-slate-200 bg-gradient-to-br from-white via-orange-50/30 to-blue-50 px-6 py-8 xl:px-12 xl:py-10">
         <div className="pointer-events-none absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(135deg,transparent_20%,rgba(147,197,253,0.32)_20%,rgba(147,197,253,0.32)_58%,transparent_58%)]" />
         <div className="relative z-10 flex flex-col items-start justify-between gap-5 2xl:flex-row 2xl:gap-8">
           <div>
@@ -605,10 +822,24 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
                   />
                   <div className="absolute top-full right-0 z-30 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 shadow-xl">
                     <button
+                      onClick={openCreateSkillEditor}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <Plus className="size-4 text-slate-500" />
+                      新建本地 Skill
+                    </button>
+                    <button
                       onClick={handleOpenImportDialog}
                       className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50"
                     >
                       <Download className="size-4 text-slate-500" />从 GitHub
+                      引入
+                    </button>
+                    <button
+                      onClick={handleOpenHubImportDialog}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <Globe2 className="size-4 text-slate-500" />从 Skills Hub
                       引入
                     </button>
                     <button
@@ -701,6 +932,71 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-950">
+                    本地技能管理
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    新建、编辑或删除真实的本地 Skill 目录与 SKILL.md 文件。
+                  </p>
+                </div>
+                <button
+                  onClick={openCreateSkillEditor}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  <Plus className="size-4" />
+                  新建 Skill
+                </button>
+              </div>
+
+              <div className="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-200">
+                {skills.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-slate-500">
+                    暂无本地 Skill。
+                  </div>
+                ) : (
+                  skills.map((skill) => (
+                    <div
+                      key={skill.id}
+                      className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-950">
+                          {skill.name}
+                        </p>
+                        <p className="mt-1 truncate text-xs text-slate-500">
+                          {skill.path}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          onClick={() => openEditSkillEditor(skill)}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          <Pencil className="size-4" />
+                          修改
+                        </button>
+                        <button
+                          onClick={() => deleteManagedSkill(skill)}
+                          disabled={deletingSkillPath === skill.path}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-red-100 px-3 text-xs font-semibold text-red-500 transition hover:bg-red-50 disabled:opacity-60"
+                        >
+                          {deletingSkillPath === skill.path ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-4" />
+                          )}
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
                 <div className="min-w-0 flex-1">
                   <h3 className="text-base font-semibold text-slate-950">
@@ -710,6 +1006,24 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
                     支持 Skills Hub 风格的
                     featured-skills.json，加载后可直接引入每个 source_url。
                   </p>
+                  {hubValidation && (
+                    <p
+                      className={cn(
+                        'mt-2 text-xs font-semibold',
+                        hubValidation.trustState === 'trusted'
+                          ? 'text-emerald-600'
+                          : hubValidation.trustState === 'partial'
+                            ? 'text-orange-600'
+                            : 'text-red-600'
+                      )}
+                    >
+                      {hubValidation.trustState === 'trusted'
+                        ? `清单已校验：${hubValidation.validCount} 个技能可引入。`
+                        : hubValidation.trustState === 'partial'
+                          ? `清单部分可用：${hubValidation.validCount} 个可引入，${hubValidation.rejectedCount} 个已过滤。`
+                          : '清单不可用：未发现可引入的 GitHub Skill。'}
+                    </p>
+                  )}
                   <input
                     value={hubUrl}
                     onChange={(event) => setHubUrl(event.target.value)}
@@ -792,6 +1106,11 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
               className="mt-5 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 transition outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
             />
 
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+              外部 Skill 会复制到本地技能目录。请只引入可信仓库，并在引入后查看
+              SKILL.md 内容再启用到关键任务。
+            </div>
+
             <div className="mt-5 flex items-center justify-end gap-3">
               <button
                 onClick={() => setShowImportDialog(false)}
@@ -808,6 +1127,289 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
                   <Loader2 className="size-4 animate-spin" />
                 )}
                 引入
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHubImportDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+          <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">
+                  从外部 Skills Hub 引入
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  加载 featured-skills.json 后，可将清单中的 source_url
+                  逐个复制到本地技能目录。
+                </p>
+              </div>
+              <button
+                onClick={() => setShowHubImportDialog(false)}
+                className="flex size-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  value={hubUrl}
+                  onChange={(event) => setHubUrl(event.target.value)}
+                  placeholder={DEFAULT_SKILLS_HUB_URL}
+                  className="h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 transition outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                />
+                <button
+                  onClick={loadHubSkills}
+                  disabled={hubLoading || !hubUrl.trim()}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {hubLoading && <Loader2 className="size-4 animate-spin" />}
+                  加载 Hub
+                </button>
+              </div>
+
+              {hubValidation && (
+                <p
+                  className={cn(
+                    'mt-3 text-xs font-semibold',
+                    hubValidation.trustState === 'trusted'
+                      ? 'text-emerald-600'
+                      : hubValidation.trustState === 'partial'
+                        ? 'text-orange-600'
+                        : 'text-red-600'
+                  )}
+                >
+                  {hubValidation.trustState === 'trusted'
+                    ? `清单已校验：${hubValidation.validCount} 个技能可引入。`
+                    : hubValidation.trustState === 'partial'
+                      ? `清单部分可用：${hubValidation.validCount} 个可引入，${hubValidation.rejectedCount} 个已过滤。`
+                      : '清单不可用：未发现可引入的 GitHub Skill。'}
+                </p>
+              )}
+
+              {importStatus && (
+                <div className="mt-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-700">
+                  {importStatus}
+                </div>
+              )}
+
+              <div className="mt-5 grid gap-3">
+                {hubSkills.length === 0 ? (
+                  <div className="flex min-h-36 items-center justify-center rounded-xl border border-dashed border-slate-200 text-sm text-slate-500">
+                    暂无可引入的 Hub 技能，请先加载清单。
+                  </div>
+                ) : (
+                  hubSkills.map((skill) => {
+                    const installed = skills.some(
+                      (localSkill) =>
+                        localSkill.name.trim().toLowerCase() ===
+                        skill.name.trim().toLowerCase()
+                    );
+                    const importing =
+                      importingSkillId === `hub-${skill.slug || skill.name}`;
+
+                    return (
+                      <div
+                        key={skill.slug || skill.name}
+                        className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                'flex size-5 shrink-0 items-center justify-center rounded-full border',
+                                installed
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                                  : 'border-slate-200 bg-white text-transparent'
+                              )}
+                            >
+                              <CircleCheck className="size-4" />
+                            </span>
+                            <p className="truncate text-sm font-semibold text-slate-950">
+                              {skill.name}
+                            </p>
+                          </div>
+                          <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-500">
+                            {skill.summary || skill.source_url}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() =>
+                            skill.source_url &&
+                            importSkill(
+                              skill.source_url,
+                              skill.name,
+                              `hub-${skill.slug || skill.name}`
+                            )
+                          }
+                          disabled={installed || importing || !skill.source_url}
+                          className={cn(
+                            'inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed',
+                            installed
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-orange-600 text-white hover:bg-orange-500 disabled:opacity-60'
+                          )}
+                        >
+                          {importing ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : installed ? (
+                            <CircleCheck className="size-4" />
+                          ) : (
+                            <Download className="size-4" />
+                          )}
+                          {importing ? '引入中' : installed ? '已引入' : '引入'}
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {skillEditorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+          <div className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">
+                  {editingSkillPath ? '修改 Skill' : '新建 Skill'}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  保存后会直接写入本地技能目录。
+                </p>
+              </div>
+              <button
+                onClick={() => setSkillEditorOpen(false)}
+                className="flex size-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
+              {!editingSkillPath && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">
+                      目标目录
+                    </span>
+                    <select
+                      value={skillForm.targetDir}
+                      onChange={(event) =>
+                        setSkillForm((current) => ({
+                          ...current,
+                          targetDir: event.target.value,
+                        }))
+                      }
+                      className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                    >
+                      {[
+                        { label: '个人目录', value: skillsDirs.user },
+                        { label: '应用目录', value: skillsDirs.app },
+                      ]
+                        .filter((item) => item.value)
+                        .map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">
+                      文件夹名
+                    </span>
+                    <input
+                      value={skillForm.folderName}
+                      onChange={(event) =>
+                        setSkillForm((current) => ({
+                          ...current,
+                          folderName: event.target.value,
+                        }))
+                      }
+                      placeholder="留空则按名称生成"
+                      className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                    />
+                  </label>
+                </div>
+              )}
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="text-sm font-semibold text-slate-700">
+                    Skill 名称
+                  </span>
+                  <input
+                    value={skillForm.name}
+                    onChange={(event) =>
+                      setSkillForm((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                    className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm font-semibold text-slate-700">
+                    描述
+                  </span>
+                  <input
+                    value={skillForm.description}
+                    onChange={(event) =>
+                      setSkillForm((current) => ({
+                        ...current,
+                        description: event.target.value,
+                      }))
+                    }
+                    className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="text-sm font-semibold text-slate-700">
+                  SKILL.md 内容
+                </span>
+                <textarea
+                  value={skillForm.content}
+                  onChange={(event) =>
+                    setSkillForm((current) => ({
+                      ...current,
+                      content: event.target.value,
+                    }))
+                  }
+                  placeholder="留空会自动生成基础 SKILL.md"
+                  className="mt-2 min-h-72 w-full resize-y rounded-xl border border-slate-200 px-3 py-3 font-mono text-sm leading-6 outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                />
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
+              <button
+                onClick={() => setSkillEditorOpen(false)}
+                className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={saveManagedSkill}
+                disabled={
+                  skillSaving ||
+                  !skillForm.name.trim() ||
+                  (!editingSkillPath && !skillForm.targetDir)
+                }
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {skillSaving && <Loader2 className="size-4 animate-spin" />}
+                保存
               </button>
             </div>
           </div>
@@ -872,7 +1474,8 @@ function SkillMarketCard({
                 </span>
               )}
               {skill.installed && (
-                <span className="rounded-full bg-white/80 px-2.5 py-1 text-xs font-medium text-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                  <CircleCheck className="size-3.5" />
                   已添加
                 </span>
               )}
@@ -920,7 +1523,8 @@ function SkillMarketCard({
           <div className="min-w-0 flex-1">
             <div className="mb-2 flex items-center gap-2">
               {skill.installed && (
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                  <CircleCheck className="size-3.5" />
                   已添加
                 </span>
               )}
@@ -981,7 +1585,8 @@ function SkillMarketCard({
             </span>
           )}
           {skill.installed && (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+              <CircleCheck className="size-3.5" />
               已添加
             </span>
           )}
@@ -1087,8 +1692,14 @@ function SkillCardFooter({
       <button
         onClick={onPrimaryAction}
         disabled={importing}
-        className="h-10 shrink-0 rounded-xl border border-orange-500 px-6 text-sm font-semibold text-orange-600 transition hover:bg-orange-50"
+        className={cn(
+          'inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border px-6 text-sm font-semibold transition',
+          skill.installed
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+            : 'border-orange-500 text-orange-600 hover:bg-orange-50'
+        )}
       >
+        {skill.installed && <CircleCheck className="size-4" />}
         {importing ? '引入中' : skill.installed ? '已引入' : '引入'}
       </button>
     </div>

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# WorkAny Build Script
+# uniins-claw Build Script
 # Usage: ./scripts/build.sh [platform] [--with-claude]
 # Platforms: linux, windows, mac-intel, mac-arm, all
 # Options:
@@ -23,6 +23,7 @@ NC='\033[0m' # No Color
 BUNDLE_CLI=false  # Bundle CLI tools (Claude Code + Codex) with shared Node.js
 BUILD_PLATFORM="current"
 SKIP_SIGNING=true  # Default: skip signing for faster builds
+WINDOWS_SIGN_CERT_DIR="$PROJECT_ROOT/certs"
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -85,7 +86,7 @@ build_api_sidecar() {
             ;;
         x86_64-pc-windows-gnu)
             # Cross-compile Windows binary using pkg (same as MSVC, just different output name)
-            pnpm bundle && pnpm exec pkg dist/bundle.cjs --targets node20-win-x64 --output dist/workany-api-x86_64-pc-windows-gnu.exe --options expose-gc
+            pnpm bundle && pnpm exec pkg dist/bundle.cjs --targets node20-win-x64 --output dist/uniins-claw-api-x86_64-pc-windows-gnu.exe --options expose-gc
             ;;
         x86_64-apple-darwin)
             pnpm run build:binary:mac-intel
@@ -131,24 +132,51 @@ bundle_cli_tools() {
     local node_platform=""
     local node_arch=""
     local node_ext=""
+    local npm_os=""
+    local npm_cpu=""
+    local npm_libc=""
+    local claude_native_package=""
+    local claude_native_bin=""
+    local codex_native_package=""
 
     case "$target" in
         x86_64-unknown-linux-gnu)
             node_platform="linux"
             node_arch="x64"
+            npm_os="linux"
+            npm_cpu="x64"
+            npm_libc="glibc"
+            claude_native_package="@anthropic-ai/claude-code-linux-x64"
+            claude_native_bin="claude"
+            codex_native_package="@openai/codex-linux-x64"
             ;;
         x86_64-pc-windows-msvc|x86_64-pc-windows-gnu)
             node_platform="win"
             node_arch="x64"
             node_ext=".exe"
+            npm_os="win32"
+            npm_cpu="x64"
+            claude_native_package="@anthropic-ai/claude-code-win32-x64"
+            claude_native_bin="claude.exe"
+            codex_native_package="@openai/codex-win32-x64"
             ;;
         x86_64-apple-darwin)
             node_platform="darwin"
             node_arch="x64"
+            npm_os="darwin"
+            npm_cpu="x64"
+            claude_native_package="@anthropic-ai/claude-code-darwin-x64"
+            claude_native_bin="claude"
+            codex_native_package="@openai/codex-darwin-x64"
             ;;
         aarch64-apple-darwin)
             node_platform="darwin"
             node_arch="arm64"
+            npm_os="darwin"
+            npm_cpu="arm64"
+            claude_native_package="@anthropic-ai/claude-code-darwin-arm64"
+            claude_native_bin="claude"
+            codex_native_package="@openai/codex-darwin-arm64"
             ;;
         current)
             local os_name=$(uname -s)
@@ -157,20 +185,43 @@ bundle_cli_tools() {
                 Darwin)
                     node_platform="darwin"
                     node_arch=$([ "$arch" = "arm64" ] && echo "arm64" || echo "x64")
+                    npm_os="darwin"
+                    npm_cpu="$node_arch"
+                    claude_native_package="@anthropic-ai/claude-code-darwin-$node_arch"
+                    claude_native_bin="claude"
+                    codex_native_package="@openai/codex-darwin-$node_arch"
                     ;;
                 Linux)
                     node_platform="linux"
                     node_arch="x64"
+                    npm_os="linux"
+                    npm_cpu="x64"
+                    npm_libc="glibc"
+                    claude_native_package="@anthropic-ai/claude-code-linux-x64"
+                    claude_native_bin="claude"
+                    codex_native_package="@openai/codex-linux-x64"
                     ;;
                 *)
                     node_platform="linux"
                     node_arch="x64"
+                    npm_os="linux"
+                    npm_cpu="x64"
+                    npm_libc="glibc"
+                    claude_native_package="@anthropic-ai/claude-code-linux-x64"
+                    claude_native_bin="claude"
+                    codex_native_package="@openai/codex-linux-x64"
                     ;;
             esac
             ;;
         *)
             node_platform="linux"
             node_arch="x64"
+            npm_os="linux"
+            npm_cpu="x64"
+            npm_libc="glibc"
+            claude_native_package="@anthropic-ai/claude-code-linux-x64"
+            claude_native_bin="claude"
+            codex_native_package="@openai/codex-linux-x64"
             ;;
     esac
 
@@ -185,7 +236,7 @@ bundle_cli_tools() {
     fi
 
     # Cache directory for Node.js downloads
-    local cache_dir="$HOME/.workany/cache"
+    local cache_dir="$HOME/.uniins-claw/cache"
     local cached_node="$cache_dir/${node_filename}/node${node_ext}"
     mkdir -p "$cache_dir"
 
@@ -259,18 +310,38 @@ bundle_cli_tools() {
     cd "$bundle_dir"
     echo '{"name":"cli-bundle","private":true,"type":"module"}' > package.json
 
-    log_info "Installing @anthropic-ai/claude-code and @openai/codex..."
-    npm install @anthropic-ai/claude-code @openai/codex --registry="${NPM_REGISTRY:-https://registry.npmmirror.com}" 2>&1 | tail -15
+    local npm_target_args=(--os="$npm_os" --cpu="$npm_cpu")
+    if [ -n "$npm_libc" ]; then
+        npm_target_args+=(--libc="$npm_libc")
+    fi
+
+    log_info "Installing @anthropic-ai/claude-code and @openai/codex for ${npm_os}-${npm_cpu}${npm_libc:+-$npm_libc}..."
+    npm install @anthropic-ai/claude-code @openai/codex \
+        "${npm_target_args[@]}" \
+        --include=optional \
+        --registry="${NPM_REGISTRY:-https://registry.npmmirror.com}" 2>&1 | tail -15
 
     # Verify installations
-    if [ ! -f "node_modules/@anthropic-ai/claude-code/cli.js" ]; then
+    if [ ! -f "node_modules/@anthropic-ai/claude-code/package.json" ]; then
         log_error "Claude Code installation failed"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+
+    if [ ! -f "node_modules/${claude_native_package}/${claude_native_bin}" ]; then
+        log_error "Claude Code native binary missing for target: ${claude_native_package}/${claude_native_bin}"
         cd "$PROJECT_ROOT"
         return 1
     fi
 
     if [ ! -f "node_modules/@openai/codex/bin/codex.js" ]; then
         log_error "Codex installation failed"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+
+    if [ ! -d "node_modules/${codex_native_package}" ]; then
+        log_error "Codex native package missing for target: ${codex_native_package}"
         cd "$PROJECT_ROOT"
         return 1
     fi
@@ -339,6 +410,20 @@ bundle_cli_tools() {
             fi
         done
     fi
+
+    for dir in node_modules/@openai/codex-*; do
+        if [ -d "$dir" ] && [ "node_modules/${codex_native_package}" != "$dir" ]; then
+            rm -rf "$dir"
+            log_info "  Removed $(basename "$(dirname "$dir")")/$(basename "$dir")"
+        fi
+    done
+
+    for dir in node_modules/@anthropic-ai/claude-code-*; do
+        if [ -d "$dir" ] && [ "node_modules/${claude_native_package}" != "$dir" ]; then
+            rm -rf "$dir"
+            log_info "  Removed $(basename "$(dirname "$dir")")/$(basename "$dir")"
+        fi
+    done
 
     # Clean @anthropic-ai/claude-code vendor/ripgrep directory
     local claude_rg_vendor="node_modules/@anthropic-ai/claude-code/vendor/ripgrep"
@@ -419,8 +504,8 @@ bundle_cli_tools() {
     cd "$PROJECT_ROOT"
 
     # Create launcher scripts for both CLIs
-    create_cli_launcher "$output_dir" "$node_platform" "claude" "@anthropic-ai/claude-code/cli.js" "$target"
-    create_cli_launcher "$output_dir" "$node_platform" "codex" "@openai/codex/bin/codex.js" "$target"
+    create_cli_launcher "$output_dir" "$node_platform" "claude" "${claude_native_package}/${claude_native_bin}" "$target" "native"
+    create_cli_launcher "$output_dir" "$node_platform" "codex" "@openai/codex/bin/codex.js" "$target" "node"
 
     # Verify
     local bundle_size=$(du -sh "$bundle_dir" 2>/dev/null | cut -f1)
@@ -435,19 +520,125 @@ create_cli_launcher() {
     local cli_name="$3"
     local cli_path="$4"
     local target="$5"
+    local launcher_kind="${6:-node}"
 
     local output_name="$cli_name"
     if [ "$node_platform" = "win" ]; then
-        output_name="${cli_name}.cmd"
-        # Windows batch launcher
-        cat > "$output_dir/$output_name" << BATCH_EOF
+        output_name="${cli_name}.exe"
+
+        # Windows batch launcher for local/manual runs.
+        cat > "$output_dir/${cli_name}.cmd" << BATCH_EOF
 @echo off
 setlocal
 set "SCRIPT_DIR=%~dp0"
 set "BUNDLE_DIR=%SCRIPT_DIR%cli-bundle"
 if not exist "%BUNDLE_DIR%\\node.exe" set "BUNDLE_DIR=%SCRIPT_DIR%..\\Resources\\cli-bundle"
+if "${launcher_kind}"=="native" (
+"%BUNDLE_DIR%\\node_modules\\${cli_path}" %*
+) else (
 "%BUNDLE_DIR%\\node.exe" "%BUNDLE_DIR%\\node_modules\\${cli_path}" %*
+)
 BATCH_EOF
+
+        if ! command -v x86_64-w64-mingw32-gcc &> /dev/null; then
+            log_error "x86_64-w64-mingw32-gcc is required to build Windows CLI launcher executables"
+            return 1
+        fi
+
+        local c_cli_path="${cli_path//\//\\\\}"
+        local launcher_source
+        launcher_source="$(mktemp "${TMPDIR:-/tmp}/uniins-claw-launcher.XXXXXX.c")"
+        cat > "$launcher_source" << C_EOF
+#include <process.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+#include <windows.h>
+
+#define CLI_REL_PATH L"$c_cli_path"
+#define LAUNCHER_KIND L"$launcher_kind"
+
+static int file_exists(const wchar_t *path) {
+    DWORD attrs = GetFileAttributesW(path);
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static void dirname_in_place(wchar_t *path) {
+    wchar_t *slash = wcsrchr(path, L'\\\\');
+    if (slash) {
+        *slash = L'\\0';
+    }
+}
+
+int wmain(int argc, wchar_t **argv) {
+    wchar_t exe_path[32768];
+    wchar_t script_dir[32768];
+    wchar_t bundle_dir[32768];
+    wchar_t node_path[32768];
+    wchar_t cli_path[32768];
+    wchar_t **child_argv;
+    int arg_offset;
+    int result;
+
+    if (!GetModuleFileNameW(NULL, exe_path, 32768)) {
+        fwprintf(stderr, L"Error: unable to locate launcher executable\\n");
+        return 1;
+    }
+
+    wcscpy(script_dir, exe_path);
+    dirname_in_place(script_dir);
+
+    swprintf(bundle_dir, 32768, L"%ls\\\\cli-bundle", script_dir);
+    swprintf(node_path, 32768, L"%ls\\\\node.exe", bundle_dir);
+    if (!file_exists(node_path)) {
+        swprintf(bundle_dir, 32768, L"%ls\\\\..\\\\Resources\\\\cli-bundle", script_dir);
+        swprintf(node_path, 32768, L"%ls\\\\node.exe", bundle_dir);
+    }
+
+    if (!file_exists(node_path)) {
+        fwprintf(stderr, L"Error: cli-bundle node.exe not found\\n");
+        return 1;
+    }
+
+    swprintf(cli_path, 32768, L"%ls\\\\node_modules\\\\%ls", bundle_dir, CLI_REL_PATH);
+    if (!file_exists(cli_path)) {
+        fwprintf(stderr, L"Error: CLI target not found: %ls\\n", cli_path);
+        return 1;
+    }
+
+    if (wcscmp(LAUNCHER_KIND, L"native") == 0) {
+        child_argv = calloc((size_t)argc + 1, sizeof(wchar_t *));
+        if (!child_argv) return 1;
+        child_argv[0] = cli_path;
+        for (int i = 1; i < argc; i++) {
+            child_argv[i] = argv[i];
+        }
+        child_argv[argc] = NULL;
+        result = _wspawnv(_P_WAIT, cli_path, (const wchar_t * const *)child_argv);
+    } else {
+        child_argv = calloc((size_t)argc + 2, sizeof(wchar_t *));
+        if (!child_argv) return 1;
+        child_argv[0] = node_path;
+        child_argv[1] = cli_path;
+        arg_offset = 2;
+        for (int i = 1; i < argc; i++) {
+            child_argv[arg_offset++] = argv[i];
+        }
+        child_argv[arg_offset] = NULL;
+        result = _wspawnv(_P_WAIT, node_path, (const wchar_t * const *)child_argv);
+    }
+
+    free(child_argv);
+    if (result == -1) {
+        fwprintf(stderr, L"Error: failed to launch CLI\\n");
+        return 1;
+    }
+    return result;
+}
+C_EOF
+        x86_64-w64-mingw32-gcc -municode "$launcher_source" -o "$output_dir/$output_name"
+        rm -f "$launcher_source"
     else
         # Unix shell launcher - searches multiple locations for bundle
         cat > "$output_dir/$output_name" << SHELL_EOF
@@ -473,7 +664,11 @@ if [ -z "\$BUNDLE_DIR" ]; then
     exit 1
 fi
 
-exec "\$BUNDLE_DIR/node" "\$BUNDLE_DIR/node_modules/${cli_path}" "\$@"
+if [ "${launcher_kind}" = "native" ]; then
+    exec "\$BUNDLE_DIR/node_modules/${cli_path}" "\$@"
+else
+    exec "\$BUNDLE_DIR/node" "\$BUNDLE_DIR/node_modules/${cli_path}" "\$@"
+fi
 SHELL_EOF
         chmod +x "$output_dir/$output_name"
     fi
@@ -501,7 +696,7 @@ SHELL_EOF
     if [ -n "$target_suffix" ]; then
         local target_launcher="$output_dir/${cli_name}${target_suffix}"
         if [ "$node_platform" = "win" ]; then
-            target_launcher="$output_dir/${cli_name}${target_suffix}.cmd"
+            target_launcher="$output_dir/${cli_name}${target_suffix}.exe"
         fi
         cp "$output_dir/$output_name" "$target_launcher"
         chmod +x "$target_launcher" 2>/dev/null || true
@@ -549,7 +744,7 @@ if (!config.bundle.resources.includes(cliResource)) {
 }
 console.log('Added unified CLI bundle config');
 
-fs.writeFileSync('$config_file', JSON.stringify(config, null, 2));
+fs.writeFileSync('$config_file', JSON.stringify(config, null, 2) + '\n');
 console.log('Config updated successfully');
 "
         log_info "Updated tauri.conf.json with unified CLI bundle configuration"
@@ -575,11 +770,333 @@ if (config.bundle.resources) {
     );
 }
 
-fs.writeFileSync('$config_file', JSON.stringify(config, null, 2));
+fs.writeFileSync('$config_file', JSON.stringify(config, null, 2) + '\n');
 console.log('Removed CLI bundle config');
 "
         log_info "Removed CLI bundle config from tauri.conf.json"
     fi
+}
+
+clean_stale_cli_artifacts() {
+    local target="$1"
+    local release_dir="$PROJECT_ROOT/src-tauri/target/$target/release"
+
+    if [ "$BUNDLE_CLI" = "true" ] || [ ! -d "$release_dir" ]; then
+        return 0
+    fi
+
+    log_info "Cleaning stale CLI bundle artifacts from $release_dir..."
+    rm -rf \
+        "$release_dir/uniins-claw-windows-x64" \
+        "$release_dir/_up_/src-api/dist/cli-bundle" \
+        "$release_dir/cli-bundle" \
+        "$release_dir/claude" \
+        "$release_dir/claude.exe" \
+        "$release_dir/claude.cmd" \
+        "$release_dir/codex" \
+        "$release_dir/codex.exe" \
+        "$release_dir/codex.cmd"
+}
+
+ensure_windows_signing_tool() {
+    if command -v osslsigncode &> /dev/null; then
+        return 0
+    fi
+
+    log_error "osslsigncode is required for Windows Authenticode signing from macOS/Linux."
+    log_info "Install it with: brew install osslsigncode"
+    log_info "Then rerun: pnpm build:app:windows -- --sign"
+    exit 1
+}
+
+ensure_windows_signing_cert() {
+    WINDOWS_SIGN_CERT_PFX="${WINDOWS_SIGN_CERT_PFX:-$WINDOWS_SIGN_CERT_DIR/windows-selfsigned.pfx}"
+    WINDOWS_SIGN_CERT_PASSWORD_FILE="${WINDOWS_SIGN_CERT_PASSWORD_FILE:-$WINDOWS_SIGN_CERT_DIR/windows-selfsigned.password}"
+    WINDOWS_SIGN_CERT_CRT="${WINDOWS_SIGN_CERT_CRT:-$WINDOWS_SIGN_CERT_DIR/windows-selfsigned.crt}"
+
+    if [ -n "${WINDOWS_SIGN_CERT_PASSWORD:-}" ] && [ -f "$WINDOWS_SIGN_CERT_PFX" ]; then
+        return 0
+    fi
+
+    mkdir -p "$WINDOWS_SIGN_CERT_DIR"
+
+    if [ -z "${WINDOWS_SIGN_CERT_PASSWORD:-}" ]; then
+        if [ -f "$WINDOWS_SIGN_CERT_PASSWORD_FILE" ]; then
+            WINDOWS_SIGN_CERT_PASSWORD="$(cat "$WINDOWS_SIGN_CERT_PASSWORD_FILE")"
+        else
+            WINDOWS_SIGN_CERT_PASSWORD="$(openssl rand -hex 24)"
+            printf '%s' "$WINDOWS_SIGN_CERT_PASSWORD" > "$WINDOWS_SIGN_CERT_PASSWORD_FILE"
+            chmod 600 "$WINDOWS_SIGN_CERT_PASSWORD_FILE"
+        fi
+    fi
+
+    if [ -f "$WINDOWS_SIGN_CERT_PFX" ]; then
+        return 0
+    fi
+
+    log_warn "No Windows signing certificate found. Creating a local self-signed certificate."
+    log_warn "Self-signed certificates are useful for internal builds, but Windows will not trust them unless the certificate is installed on the target machine."
+
+    local key_file="$WINDOWS_SIGN_CERT_DIR/windows-selfsigned.key"
+    local subject="${WINDOWS_SIGN_SUBJECT:-/CN=uniins-claw Self-Signed Code Signing/O=uniins-claw}"
+
+    openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes \
+        -subj "$subject" \
+        -addext "extendedKeyUsage=codeSigning" \
+        -keyout "$key_file" \
+        -out "$WINDOWS_SIGN_CERT_CRT"
+
+    openssl pkcs12 -export \
+        -inkey "$key_file" \
+        -in "$WINDOWS_SIGN_CERT_CRT" \
+        -out "$WINDOWS_SIGN_CERT_PFX" \
+        -name "uniins-claw Self-Signed Code Signing" \
+        -passout "pass:$WINDOWS_SIGN_CERT_PASSWORD"
+
+    rm -f "$key_file"
+    chmod 600 "$WINDOWS_SIGN_CERT_PFX" "$WINDOWS_SIGN_CERT_CRT"
+    log_info "Created self-signed Windows certificate: $WINDOWS_SIGN_CERT_PFX"
+}
+
+sign_windows_file() {
+    local file="$1"
+    local signed_file="$file.signed"
+    local app_name="${WINDOWS_SIGN_APP_NAME:-uniins-claw}"
+    local app_url="${WINDOWS_SIGN_APP_URL:-https://uniins-claw.ai}"
+    local timestamp_url="${WINDOWS_SIGN_TIMESTAMP_URL:-}"
+
+    if [ ! -f "$file" ]; then
+        return 0
+    fi
+
+    if ! file "$file" 2>/dev/null | grep -q "PE32"; then
+        log_warn "Skipping non-PE .exe file: $file"
+        return 0
+    fi
+
+    log_info "Signing Windows binary: $file"
+
+    local args=(
+        sign
+        -pkcs12 "$WINDOWS_SIGN_CERT_PFX"
+        -pass "$WINDOWS_SIGN_CERT_PASSWORD"
+        -n "$app_name"
+        -i "$app_url"
+        -h sha256
+    )
+
+    if [ -n "$timestamp_url" ]; then
+        args+=(-t "$timestamp_url")
+    fi
+
+    args+=(-in "$file" -out "$signed_file")
+
+    osslsigncode "${args[@]}"
+    mv "$signed_file" "$file"
+}
+
+sign_windows_release() {
+    local target="$1"
+    local release_dir="$PROJECT_ROOT/src-tauri/target/$target/release"
+
+    if [ "$SKIP_SIGNING" = "true" ]; then
+        return 0
+    fi
+
+    if [[ "$target" != *windows* ]]; then
+        return 0
+    fi
+
+    ensure_windows_signing_tool
+    ensure_windows_signing_cert
+
+    log_info "Signing Windows release artifacts..."
+    sign_windows_file "$release_dir/uniins-claw.exe"
+    sign_windows_file "$release_dir/uniins-claw-api.exe"
+
+    if [ "$BUNDLE_CLI" = "true" ]; then
+        sign_windows_file "$release_dir/claude.exe"
+        sign_windows_file "$release_dir/codex.exe"
+        if [ -d "$release_dir/_up_/src-api/dist/cli-bundle" ]; then
+            while IFS= read -r -d '' exe_file; do
+                sign_windows_file "$exe_file"
+            done < <(find "$release_dir/_up_/src-api/dist/cli-bundle" -type f -name '*.exe' -print0)
+        fi
+    fi
+
+    log_info "Windows signing completed."
+}
+
+prepare_windows_portable_dir() {
+    local target="$1"
+    local release_dir="$PROJECT_ROOT/src-tauri/target/$target/release"
+    local portable_dir="$release_dir/uniins-claw-windows-x64"
+    local app_exe="$release_dir/uniins-claw.exe"
+
+    if [[ "$target" != *windows* ]]; then
+        return 0
+    fi
+
+    if [ ! -f "$app_exe" ]; then
+        log_warn "Windows app executable not found at $app_exe; skipping portable directory"
+        return 0
+    fi
+
+    log_info "Preparing Windows portable directory..."
+    rm -rf "$portable_dir"
+    mkdir -p "$portable_dir"
+
+    cp "$app_exe" "$portable_dir/"
+    cp "$release_dir/uniins-claw-api.exe" "$portable_dir/" 2>/dev/null || true
+    cp "$release_dir/WebView2Loader.dll" "$portable_dir/" 2>/dev/null || {
+        log_warn "WebView2Loader.dll not found in $release_dir"
+    }
+
+    if [ "$BUNDLE_CLI" = "true" ]; then
+        cp "$release_dir/claude.exe" "$portable_dir/" 2>/dev/null || true
+        cp "$release_dir/codex.exe" "$portable_dir/" 2>/dev/null || true
+        if [ -d "$release_dir/_up_" ]; then
+            cp -R "$release_dir/_up_" "$portable_dir/"
+        fi
+    fi
+
+    log_info "Windows portable output: $portable_dir"
+}
+
+ensure_windows_installer_tool() {
+    if command -v makensis &> /dev/null; then
+        return 0
+    fi
+
+    log_error "makensis is required to build a Windows installer from macOS/Linux."
+    log_info "Install it with: brew install nsis"
+    exit 1
+}
+
+build_windows_installer() {
+    local target="$1"
+    local release_dir="$PROJECT_ROOT/src-tauri/target/$target/release"
+    local portable_dir="$release_dir/uniins-claw-windows-x64"
+    local version
+    version="$(get_app_version)"
+    local installer_path="$release_dir/uniins-claw_${version}_x64-setup.exe"
+    local nsis_script="$release_dir/uniins-claw-installer.nsi"
+    local installer_icon="$PROJECT_ROOT/src-tauri/icons/icon.ico"
+    local license_file="$PROJECT_ROOT/LICENSE"
+
+    if [[ "$target" != *windows* ]]; then
+        return 0
+    fi
+
+    if [ ! -d "$portable_dir" ]; then
+        log_warn "Portable directory not found at $portable_dir; skipping installer"
+        return 0
+    fi
+
+    ensure_windows_installer_tool
+
+    log_info "Building Windows installer..."
+    cat > "$nsis_script" << NSIS_EOF
+Unicode true
+ManifestDPIAware true
+RequestExecutionLevel user
+!include MUI2.nsh
+
+Name "uniins-claw"
+OutFile "$installer_path"
+Icon "$installer_icon"
+UninstallIcon "$installer_icon"
+InstallDir "\$LOCALAPPDATA\\Programs\\uniins-claw"
+InstallDirRegKey HKCU "Software\\uniins-claw" "InstallDir"
+BrandingText "uniins-claw Work Assistant"
+ShowInstDetails show
+ShowUninstDetails show
+!define MUI_ABORTWARNING
+!define MUI_ICON "$installer_icon"
+!define MUI_UNICON "$installer_icon"
+!define MUI_WELCOMEPAGE_TITLE "欢迎安装 uniins-claw"
+!define MUI_WELCOMEPAGE_TEXT "uniins-claw 是面向本地工作的智能助手桌面应用。安装向导将复制应用文件、创建快捷方式，并注册卸载信息。\$\r\$\n\$\r\$\n建议在安装前关闭正在运行的 uniins-claw。"
+!define MUI_COMPONENTSPAGE_TEXT_TOP "选择要安装的组件。应用核心文件为必选，快捷方式可按需创建。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "选择 uniins-claw 的安装目录。默认安装到当前用户目录，无需管理员权限。"
+!define MUI_FINISHPAGE_RUN "\$INSTDIR\\uniins-claw.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "启动 uniins-claw"
+!define MUI_FINISHPAGE_TITLE "uniins-claw 安装完成"
+!define MUI_FINISHPAGE_TEXT "uniins-claw 已安装到你的电脑。你可以从开始菜单、桌面快捷方式或安装目录启动应用。"
+!define MUI_FINISHPAGE_NOAUTOCLOSE
+
+VIProductVersion "${version}.0"
+VIAddVersionKey "ProductName" "uniins-claw"
+VIAddVersionKey "CompanyName" "uniins-claw"
+VIAddVersionKey "FileDescription" "uniins-claw Installer"
+VIAddVersionKey "FileVersion" "${version}"
+VIAddVersionKey "ProductVersion" "${version}"
+VIAddVersionKey "LegalCopyright" "Copyright © uniins-claw contributors"
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "$license_file"
+!insertmacro MUI_PAGE_COMPONENTS
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "SimpChinese"
+
+Section "!uniins-claw 应用程序" SEC_APP
+  SectionIn RO
+  SetOutPath "\$INSTDIR"
+  File /r "$portable_dir/*"
+
+  WriteUninstaller "\$INSTDIR\\Uninstall.exe"
+  WriteRegStr HKCU "Software\\uniins-claw" "InstallDir" "\$INSTDIR"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "DisplayName" "uniins-claw"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "DisplayVersion" "${version}"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "Publisher" "uniins-claw"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "InstallLocation" "\$INSTDIR"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "UninstallString" '"\$INSTDIR\\Uninstall.exe"'
+  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "NoModify" 1
+  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw" "NoRepair" 1
+SectionEnd
+
+Section "开始菜单快捷方式" SEC_STARTMENU
+  CreateDirectory "\$SMPROGRAMS\\uniins-claw"
+  CreateShortCut "\$SMPROGRAMS\\uniins-claw\\uniins-claw.lnk" "\$INSTDIR\\uniins-claw.exe"
+  CreateShortCut "\$SMPROGRAMS\\uniins-claw\\Uninstall uniins-claw.lnk" "\$INSTDIR\\Uninstall.exe"
+SectionEnd
+
+Section "桌面快捷方式" SEC_DESKTOP
+  CreateShortCut "\$DESKTOP\\uniins-claw.lnk" "\$INSTDIR\\uniins-claw.exe"
+SectionEnd
+
+LangString DESC_SEC_APP \${LANG_SIMPCHINESE} "安装 uniins-claw 主程序、本地 API 和运行所需资源。"
+LangString DESC_SEC_STARTMENU \${LANG_SIMPCHINESE} "在开始菜单中创建 uniins-claw 和卸载入口。"
+LangString DESC_SEC_DESKTOP \${LANG_SIMPCHINESE} "在桌面创建 uniins-claw 快捷方式。"
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT \${SEC_APP} \$(DESC_SEC_APP)
+  !insertmacro MUI_DESCRIPTION_TEXT \${SEC_STARTMENU} \$(DESC_SEC_STARTMENU)
+  !insertmacro MUI_DESCRIPTION_TEXT \${SEC_DESKTOP} \$(DESC_SEC_DESKTOP)
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+Section "Uninstall"
+  Delete "\$DESKTOP\\uniins-claw.lnk"
+  Delete "\$SMPROGRAMS\\uniins-claw\\uniins-claw.lnk"
+  Delete "\$SMPROGRAMS\\uniins-claw\\Uninstall uniins-claw.lnk"
+  RMDir "\$SMPROGRAMS\\uniins-claw"
+
+  DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\uniins-claw"
+  DeleteRegKey HKCU "Software\\uniins-claw"
+
+  RMDir /r "\$INSTDIR"
+SectionEnd
+NSIS_EOF
+
+    makensis "$nsis_script"
+
+    if [ "$SKIP_SIGNING" != "true" ]; then
+        sign_windows_file "$installer_path"
+    fi
+
+    log_info "Windows installer output: $installer_path"
 }
 
 # Update tauri.conf.json to disable signing
@@ -602,7 +1119,7 @@ if (config.bundle && config.bundle.macOS) {
     delete config.bundle.macOS.signingIdentity;
 }
 
-fs.writeFileSync('$config_file', JSON.stringify(config, null, 2));
+fs.writeFileSync('$config_file', JSON.stringify(config, null, 2) + '\n');
 console.log('Signing disabled in config');
 "
 }
@@ -647,6 +1164,7 @@ build_linux() {
     # Bundle CLI tools if requested (unified bundle with both Claude and Codex)
     bundle_cli_tools "$target"
     update_tauri_config
+    clean_stale_cli_artifacts "$target"
 
     # Add target if not exists
     rustup target add "$target" 2>/dev/null || true
@@ -689,6 +1207,7 @@ build_windows() {
     # Bundle CLI tools if requested (unified bundle with both Claude and Codex)
     bundle_cli_tools "$target"
     update_tauri_config
+    clean_stale_cli_artifacts "$target"
 
     # Add target if not exists
     rustup target add "$target" 2>/dev/null || true
@@ -703,10 +1222,16 @@ build_windows() {
         pnpm tauri build --target "$target"
     fi
 
+    sign_windows_release "$target"
+    prepare_windows_portable_dir "$target"
+    build_windows_installer "$target"
+
     log_info "Windows build completed!"
     if [ "$target" = "x86_64-pc-windows-gnu" ]; then
-        log_info "Output: src-tauri/target/$target/release/workany.exe"
-        log_info "Note: MSI/NSIS installers require building on Windows"
+        log_info "Output: src-tauri/target/$target/release/uniins-claw.exe"
+        log_info "Portable output: src-tauri/target/$target/release/uniins-claw-windows-x64/"
+        log_info "Installer output: src-tauri/target/$target/release/uniins-claw_$(get_app_version)_x64-setup.exe"
+        log_info "Note: NSIS installer is generated locally; MSI still requires a native Windows build environment"
     else
         log_info "Output: src-tauri/target/$target/release/bundle/"
     fi
@@ -770,14 +1295,14 @@ sign_cli_bundle_in_app() {
     local app_bundle=""
     case "$target" in
         aarch64-apple-darwin|x86_64-apple-darwin)
-            app_bundle="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/WorkAny.app"
+            app_bundle="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/uniins-claw.app"
             ;;
         current)
             local arch=$(uname -m)
             if [ "$arch" = "arm64" ]; then
-                app_bundle="$PROJECT_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/WorkAny.app"
+                app_bundle="$PROJECT_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/uniins-claw.app"
             else
-                app_bundle="$PROJECT_ROOT/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/WorkAny.app"
+                app_bundle="$PROJECT_ROOT/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/uniins-claw.app"
             fi
             ;;
         *)
@@ -867,17 +1392,17 @@ notarize_app() {
     local app_path=""
     case "$target" in
         aarch64-apple-darwin)
-            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/WorkAny.app"
+            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/uniins-claw.app"
             ;;
         x86_64-apple-darwin)
-            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/WorkAny.app"
+            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/uniins-claw.app"
             ;;
         current)
             local arch=$(uname -m)
             if [ "$arch" = "arm64" ]; then
-                app_path="$PROJECT_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/WorkAny.app"
+                app_path="$PROJECT_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/uniins-claw.app"
             else
-                app_path="$PROJECT_ROOT/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/WorkAny.app"
+                app_path="$PROJECT_ROOT/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/uniins-claw.app"
             fi
             ;;
         *)
@@ -950,14 +1475,14 @@ recreate_dmg() {
 
     case "$target" in
         aarch64-apple-darwin)
-            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/WorkAny.app"
+            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/uniins-claw.app"
             dmg_dir="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/dmg"
-            dmg_name="WorkAny_${version}_aarch64.dmg"
+            dmg_name="uniins-claw_${version}_aarch64.dmg"
             ;;
         x86_64-apple-darwin)
-            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/WorkAny.app"
+            app_path="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/macos/uniins-claw.app"
             dmg_dir="$PROJECT_ROOT/src-tauri/target/$target/release/bundle/dmg"
-            dmg_name="WorkAny_${version}_x64.dmg"
+            dmg_name="uniins-claw_${version}_x64.dmg"
             ;;
         *)
             log_warn "DMG recreation not needed for $target"
@@ -978,12 +1503,24 @@ recreate_dmg() {
     local temp_dir=$(mktemp -d)
     cp -R "$app_path" "$temp_dir/"
     ln -s /Applications "$temp_dir/Applications"
+    cp "$PROJECT_ROOT/src-tauri/icons/icon.icns" "$temp_dir/.VolumeIcon.icns" 2>/dev/null || true
+    cat > "$temp_dir/安装说明.txt" << DMG_README_EOF
+uniins-claw 安装说明
+
+1. 将 uniins-claw 拖入 Applications 文件夹。
+2. 从 Applications 启动 uniins-claw。
+3. 首次启动如遇 macOS 安全提示，请在“系统设置 > 隐私与安全性”中允许打开。
+4. 应用会在本机启动必要的本地服务，用于任务、文件、技能和模型能力调用。
+
+如需卸载，请从 Applications 删除 uniins-claw，并按需清理用户目录中的应用数据。
+DMG_README_EOF
 
     # Hide .app extension in Finder
-    SetFile -a E "$temp_dir/WorkAny.app" 2>/dev/null || true
+    SetFile -a E "$temp_dir/uniins-claw.app" 2>/dev/null || true
+    SetFile -a C "$temp_dir" 2>/dev/null || true
 
-    log_info "Creating DMG with Applications shortcut..."
-    hdiutil create -volname WorkAny -srcfolder "$temp_dir" -ov -format UDZO "$dmg_dir/$dmg_name"
+    log_info "Creating DMG with Applications shortcut and install guide..."
+    hdiutil create -volname uniins-claw -srcfolder "$temp_dir" -ov -format UDZO "$dmg_dir/$dmg_name"
 
     # Clean up temp directory
     rm -rf "$temp_dir"
@@ -1114,7 +1651,7 @@ build_current() {
 
 # Show help
 show_help() {
-    echo "WorkAny Build Script"
+    echo "uniins-claw Build Script"
     echo ""
     echo "Usage: ./scripts/build.sh [platform] [options]"
     echo ""
@@ -1133,7 +1670,9 @@ show_help() {
     echo "                  - @anthropic-ai/claude-code"
     echo "                  - @openai/codex"
     echo "                  Allows out-of-box Claude Code and Codex sandbox support"
-    echo "  --sign          Enable code signing and notarization (macOS)"
+    echo "  --sign          Enable code signing. macOS uses Developer ID/notarization;"
+    echo "                  Windows uses Authenticode. If WINDOWS_SIGN_CERT_PFX is not set,"
+    echo "                  a local self-signed certificate is generated under ./certs/"
     echo "                  Default: signing is DISABLED for faster builds"
     echo "  --no-sign       Explicitly disable signing (default behavior)"
     echo ""
@@ -1153,6 +1692,7 @@ show_help() {
     echo "  ./scripts/build.sh mac-arm --with-cli --sign  # Full release build"
     echo "  ./scripts/build.sh windows             # Cross-compile for Windows from macOS"
     echo "  ./scripts/build.sh windows --with-cli  # Windows with bundled CLI tools"
+    echo "  ./scripts/build.sh windows --sign      # Windows with self-signed Authenticode signature"
     echo ""
     echo "Note: Cross-compilation requires proper toolchain setup."
     echo "      For CI/CD builds, use GitHub Actions workflow instead."
@@ -1171,6 +1711,9 @@ parse_args() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --)
+                shift
+                ;;
             --with-cli)
                 BUNDLE_CLI=true
                 shift

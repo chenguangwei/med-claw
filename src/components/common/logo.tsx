@@ -12,7 +12,7 @@ export function LogoMark({ className }: { className?: string }) {
     <svg
       viewBox="0 0 64 64"
       role="img"
-      aria-label="U2Claw"
+      aria-label="uniins-claw"
       className={cn('size-8 shrink-0', className)}
     >
       <defs>

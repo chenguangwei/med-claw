@@ -386,7 +386,7 @@ async function copyDir(src: string, dest: string): Promise<void> {
 }
 
 /**
- * Install built-in skills from project resources to ~/.workany/skills/
+ * Install built-in skills from project resources to ~/.uniins-claw/skills/
  * Only copies if the destination doesn't exist or is outdated.
  */
 export async function installBuiltinSkills(): Promise<void> {
@@ -440,7 +440,7 @@ export async function installBuiltinSkills(): Promise<void> {
 }
 
 /**
- * Load skills from all directories (both ~/.claude/skills/ and ~/.workany/skills/)
+ * Load skills from all directories (both ~/.claude/skills/ and ~/.uniins-claw/skills/)
  */
 export async function loadAllSkills(
   skillsConfig?: SkillsConfig
@@ -535,8 +535,8 @@ function clearRegisteredFileSkills(): void {
 /**
  * Synchronize file-based skills into the SDK's global skill registry.
  *
- * The SDK registers bundled skills per agent construction, while WorkAny skills
- * live on disk. This bridge makes ~/.claude/skills and ~/.workany/skills
+ * The SDK registers bundled skills per agent construction, while uniins-claw skills
+ * live on disk. This bridge makes ~/.claude/skills and ~/.uniins-claw/skills
  * invocable through the SDK Skill tool.
  */
 export async function syncSdkSkills(

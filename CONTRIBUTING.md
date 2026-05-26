@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Thank you for your interest in the WorkAny project! We welcome all forms of contributions, including but not limited to:
+Thank you for your interest in the uniins-claw project! We welcome all forms of contributions, including but not limited to:
 
 - Bug reports
 - Feature requests
@@ -16,12 +16,12 @@ Please be kind and respectful when participating in this project. We are committ
 
 ### Reporting Bugs
 
-1. Search [Issues](https://github.com/workany-ai/workany/issues) to check if a similar issue already exists
+1. Search [Issues](https://github.com/uniins-claw-ai/uniins-claw/issues) to check if a similar issue already exists
 2. If not, create a new Issue
 3. Use a clear title to describe the problem
 4. Provide the following information:
    - Operating system and version
-   - WorkAny version
+   - uniins-claw version
    - Steps to reproduce
    - Expected behavior vs actual behavior
    - Relevant error logs or screenshots
@@ -40,12 +40,12 @@ Please be kind and respectful when participating in this project. We are committ
 1. Fork this repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/workany.git
-   cd workany
+   git clone https://github.com/YOUR-USERNAME/uniins-claw.git
+   cd uniins-claw
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/workany-ai/workany.git
+   git remote add upstream https://github.com/uniins-claw-ai/uniins-claw.git
    ```
 4. Install dependencies:
    ```bash
@@ -128,7 +128,7 @@ All submissions require code review. Reviewers will focus on:
 ### Project Structure
 
 ```
-workany/
+uniins-claw/
 ├── src/                    # Frontend source code
 │   ├── components/         # React components
 │   ├── pages/              # Page components
@@ -176,7 +176,7 @@ pnpm tsc --noEmit
 
 By contributing to this project, you agree that:
 
-1. Your contributions will be licensed under the [WorkAny Community License](LICENSE)
+1. Your contributions will be licensed under the [uniins-claw Community License](LICENSE)
 2. ThinkAny, LLC may use your contributed code for commercial purposes, including cloud services and enterprise editions
 3. ThinkAny, LLC may adjust the open-source agreement as deemed necessary
 
@@ -184,7 +184,7 @@ By contributing to this project, you agree that:
 
 If you have any questions, feel free to reach out:
 
-- GitHub Issues: [github.com/workany-ai/workany/issues](https://github.com/workany-ai/workany/issues)
-- Email: hello@workany.ai
+- GitHub Issues: [github.com/uniins-claw-ai/uniins-claw/issues](https://github.com/uniins-claw-ai/uniins-claw/issues)
+- Email: hello@uniins-claw.ai
 
 Thank you for your contributions!

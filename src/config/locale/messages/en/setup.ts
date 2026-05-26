@@ -1,9 +1,9 @@
 export default {
-  title: 'Welcome to U2Claw',
+  title: 'Welcome to uniins-claw',
   subtitle: "Let's make sure you have all the required tools installed",
   checking: 'Checking dependencies...',
   checkingEnvironment: 'Checking environment...',
-  redirecting: 'Entering U2Claw...',
+  redirecting: 'Entering uniins-claw...',
   recheck: 'Recheck',
   skip: 'Skip',
   retry: 'Retry',

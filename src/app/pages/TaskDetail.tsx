@@ -1797,7 +1797,7 @@ function ErrorMessage({ message }: { message: string }) {
   if (isCustomApiError) {
     const parts = message.split('|');
     const baseUrl = parts[1] || '';
-    const logPath = parts[2] || '~/.workany/logs/workany.log';
+    const logPath = parts[2] || '~/.uniins-claw/logs/uniins-claw.log';
     const errorMessage = (
       t.common.errors.customApiError ||
       'Custom API ({baseUrl}) may not be compatible with Claude Code SDK. Please check the API configuration or try a different provider. Log file: {logPath}'
@@ -1824,7 +1824,7 @@ function ErrorMessage({ message }: { message: string }) {
   // Check if this is an internal error (format: __INTERNAL_ERROR__|logPath)
   const isInternalError = message.startsWith('__INTERNAL_ERROR__|');
   if (isInternalError) {
-    const logPath = message.split('|')[1] || '~/.workany/logs/workany.log';
+    const logPath = message.split('|')[1] || '~/.uniins-claw/logs/uniins-claw.log';
     const errorMessage = (
       t.common.errors.internalError ||
       'Internal server error. Please check log file: {logPath}'

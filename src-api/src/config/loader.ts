@@ -207,7 +207,7 @@ class ConfigLoader {
    */
   private findConfigFile(): string | null {
     const searchPaths = [
-      process.env.WORKANY_CONFIG,
+      process.env.UNIINS_CLAW_CONFIG,
       ...CONFIG_SEARCH_PATHS,
       getConfigPath(), // Platform-specific config path
       path.join(process.env.HOME || '', APP_DIR_NAME, 'config.json'), // Legacy fallback
@@ -332,6 +332,20 @@ class ConfigLoader {
         timestamp: new Date(),
       });
     }
+  }
+
+  /**
+   * Persist the current configuration to disk.
+   */
+  async saveToFile(filePath = getConfigPath()): Promise<void> {
+    const absolutePath = path.resolve(filePath);
+    await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.promises.writeFile(
+      absolutePath,
+      `${JSON.stringify(this.config, null, 2)}\n`,
+      'utf-8'
+    );
+    this.configPath = absolutePath;
   }
 
   /**

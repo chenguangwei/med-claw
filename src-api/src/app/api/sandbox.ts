@@ -103,9 +103,13 @@ sandbox.get('/debug/codex-paths', async (c) => {
     targetTriple = '-x86_64-pc-windows-msvc';
   }
 
+  const codexExt = platform === 'win32' ? '.exe' : '';
+  const windowsTriples = ['-x86_64-pc-windows-msvc', '-x86_64-pc-windows-gnu'];
+  const targetTriples = platform === 'win32' ? windowsTriples : [targetTriple];
+
   const pathsToCheck = [
-    path.join(execDir, `codex${targetTriple}`),
-    path.join(execDir, 'codex'),
+    ...targetTriples.map((suffix) => path.join(execDir, `codex${suffix}${codexExt}`)),
+    path.join(execDir, `codex${codexExt}`),
     // Tauri resources location
     path.join(execDir, '..', 'Resources', '_up_', 'src-api', 'dist', 'cli-bundle', 'node'),
     path.join(execDir, '..', 'Resources', 'cli-bundle', 'node'),

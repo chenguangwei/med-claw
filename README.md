@@ -1,8 +1,8 @@
-# WorkAny
+# uniins-claw
 
-WorkAny is a desktop AI agent application that executes tasks through natural language. It provides real-time code generation, tool execution, and workspace management.
+uniins-claw is a desktop AI agent application that executes tasks through natural language. It provides real-time code generation, tool execution, and workspace management.
 
-**Website:** [workany.ai](https://workany.ai)
+**Website:** [uniins-claw.ai](https://uniins-claw.ai)
 
 ![](./public/imgs/home.png)
 
@@ -34,13 +34,13 @@ WorkAny is a desktop AI agent application that executes tasks through natural la
 
 ## ❤️ Sponsor
 
-<a href='https://302.ai/?utm_source=workany_github' target='_blank'>
+<a href='https://302.ai/?utm_source=uniins-claw_github' target='_blank'>
   <img src="https://github.com/user-attachments/assets/a03edf82-2031-4f23-bdb8-bfc0bfd168a4" width="100%" alt="icon"/>
 </a>
 
-[302.AI](https://302.ai/?utm_source=workany_github) is a pay-as-you-go AI application platform that offers the most comprehensive AI APIs and online applications available.
+[302.AI](https://302.ai/?utm_source=uniins-claw_github) is a pay-as-you-go AI application platform that offers the most comprehensive AI APIs and online applications available.
 
-> If you want to sponsor this project, please contact us via email: [hello@workany.ai](mailto:hello@workany.ai)
+> If you want to sponsor this project, please contact us via email: [hello@uniins-claw.ai](mailto:hello@uniins-claw.ai)
 
 ## Features
 
@@ -56,7 +56,7 @@ WorkAny is a desktop AI agent application that executes tasks through natural la
 ## Project Structure
 
 ```
-workany/
+uniins-claw/
 ├── src/                # Frontend (React + TypeScript)
 ├── src-api/            # Backend API (Hono + @codeany/open-agent-sdk)
 └── src-tauri/          # Desktop app (Tauri + Rust)
@@ -106,20 +106,20 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 ## Community
 
 - [Join Discord](https://discord.gg/rDSmZ8HS39)
-- [Follow on X](https://x.com/workanyai)
+- [Follow on X](https://x.com/uniins-clawai)
 
 ## ❤️ Contributors
 
-<a href="https://github.com/workany-ai/workany/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=workany-ai/workany" />
+<a href="https://github.com/uniins-claw-ai/uniins-claw/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=uniins-claw-ai/uniins-claw" />
 </a>
 
 ## ⭐️ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=workany-ai/workany&type=Timeline)](https://star-history.com/#workany-ai/workany&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=uniins-claw-ai/uniins-claw&type=Timeline)](https://star-history.com/#uniins-claw-ai/uniins-claw&Timeline)
 
 ## License
 
-This project is licensed under the [WorkAny Community License](LICENSE), based on Apache License 2.0 with additional conditions.
+This project is licensed under the [uniins-claw Community License](LICENSE), based on Apache License 2.0 with additional conditions.
 
 © 2026 ThinkAny, LLC. All rights reserved.

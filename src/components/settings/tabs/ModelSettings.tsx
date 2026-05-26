@@ -35,6 +35,13 @@ const openExternalUrl = async (url: string) => {
 
 type MainTab = 'providers' | 'settings';
 
+const pinnedProviderIds = ['deepseek', 'qwen', 'zhipu'];
+
+const getProviderPriority = (providerId: string) => {
+  const index = pinnedProviderIds.indexOf(providerId);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+};
+
 // Provider Card component
 function ProviderCard({
   provider,
@@ -198,6 +205,7 @@ export function ModelSettings({
           baseUrl: newProvider.baseUrl,
           apiKey: newProvider.apiKey,
           model: testModel,
+          apiType: newProvider.apiType,
         }),
       });
 
@@ -260,6 +268,7 @@ export function ModelSettings({
           baseUrl: selectedProvider.baseUrl,
           apiKey: selectedProvider.apiKey,
           model: testModel,
+          apiType: selectedProvider.apiType || 'openai-completions',
         }),
       });
 
@@ -290,18 +299,25 @@ export function ModelSettings({
     }
   };
 
+  const orderedProviders = [...settings.providers].sort(
+    (a, b) => getProviderPriority(a.id) - getProviderPriority(b.id)
+  );
+
   // Get all available models from enabled providers
-  const availableModels = settings.providers
+  const availableModels = orderedProviders
     .filter((p) => p.enabled && p.apiKey)
     .flatMap((p) => p.models.map((m) => ({ provider: p, model: m })));
 
-  // Sort providers: enabled first, then configured, then others
-  const sortedProviders = [...settings.providers]
+  // Sort providers: pinned first, then enabled, then configured, then others
+  const sortedProviders = orderedProviders
     .filter(
       (p) =>
         !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase())
     )
     .sort((a, b) => {
+      const priorityDiff =
+        getProviderPriority(a.id) - getProviderPriority(b.id);
+      if (priorityDiff !== 0) return priorityDiff;
       if (a.enabled && a.apiKey && !(b.enabled && b.apiKey)) return -1;
       if (b.enabled && b.apiKey && !(a.enabled && a.apiKey)) return 1;
       if (a.apiKey && !b.apiKey) return -1;

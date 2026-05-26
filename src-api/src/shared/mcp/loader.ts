@@ -1,7 +1,7 @@
 /**
  * MCP Config Loader
  *
- * Loads MCP server configuration from ~/.workany/mcp.json
+ * Loads MCP server configuration from ~/.uniins-claw/mcp.json
  */
 
 import fs from 'fs/promises';
@@ -30,8 +30,8 @@ export interface McpSSEServerConfig {
 
 export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig | McpSSEServerConfig;
 
-// WorkAny MCP Config file format
-interface _WorkAnyMcpConfig {
+// uniins-claw MCP Config file format
+interface _UniinsClawMcpConfig {
   mcpServers: Record<
     string,
     {
@@ -123,7 +123,7 @@ export interface McpConfig {
 }
 
 /**
- * Load MCP servers configuration from ~/.workany/mcp.json
+ * Load MCP servers configuration from ~/.uniins-claw/mcp.json
  *
  * @param mcpConfig Optional config to control loading
  * @returns Record of server name to config
@@ -138,7 +138,7 @@ export async function loadMcpServers(
   }
 
   const configPath = getMcpConfigPath();
-  const servers = await loadMcpServersFromFile(configPath, 'workany');
+  const servers = await loadMcpServersFromFile(configPath, 'uniins-claw');
 
   const serverCount = Object.keys(servers).length;
   if (serverCount > 0) {

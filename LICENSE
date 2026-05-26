@@ -1,23 +1,23 @@
-# WorkAny Community License
+# uniins-claw Community License
 
 Copyright (c) 2026 ThinkAny, LLC. All rights reserved.
 
 ---
 
-WorkAny is licensed under the WorkAny Community License, based on Apache License 2.0 with the following additional conditions:
+uniins-claw is licensed under the uniins-claw Community License, based on Apache License 2.0 with the following additional conditions:
 
 ## 1. Commercial Usage
 
-a. WorkAny may be utilized commercially, including as a backend service for other applications or as an application development platform for enterprises, without modifying the source code.
+a. uniins-claw may be utilized commercially, including as a backend service for other applications or as an application development platform for enterprises, without modifying the source code.
 
-b. A commercial license must be obtained from ThinkAny, LLC if you want to develop and distribute a derivative work based on WorkAny.
+b. A commercial license must be obtained from ThinkAny, LLC if you want to develop and distribute a derivative work based on uniins-claw.
 
 c. Should the conditions below be met, a commercial license must be obtained from ThinkAny, LLC:
 
-   - **Multi-tenant Service**: Unless explicitly authorized by ThinkAny, LLC in writing, you may not use the WorkAny source code to operate a multi-tenant service where multiple users or organizations share a single deployment.
+   - **Multi-tenant Service**: Unless explicitly authorized by ThinkAny, LLC in writing, you may not use the uniins-claw source code to operate a multi-tenant service where multiple users or organizations share a single deployment.
 
-   - **Logo and Copyright Information**: In the process of using WorkAny's frontend, you may not remove or modify the logo or copyright information in the WorkAny interface. This restriction is inapplicable to uses of WorkAny that do not involve its frontend.
-     - Frontend Definition: For the purposes of this license, the "frontend" of WorkAny includes all components located in the `src/` directory when running WorkAny from the source code.
+   - **Logo and Copyright Information**: In the process of using uniins-claw's frontend, you may not remove or modify the logo or copyright information in the uniins-claw interface. This restriction is inapplicable to uses of uniins-claw that do not involve its frontend.
+     - Frontend Definition: For the purposes of this license, the "frontend" of uniins-claw includes all components located in the `src/` directory when running uniins-claw from the source code.
 
 ## 2. Contributor Agreement
 
@@ -29,7 +29,7 @@ b. Your contributed code may be used for commercial purposes, including but not 
 
 ## 3. Restrictions
 
-a. You may not use the WorkAny name, logo, or trademarks to promote derivative products without prior written consent.
+a. You may not use the uniins-claw name, logo, or trademarks to promote derivative products without prior written consent.
 
 b. You may not represent your derivative work as being endorsed or certified by ThinkAny, LLC.
 

@@ -13,6 +13,12 @@ import { Hono } from 'hono';
 
 import { getAllSkillsDirs, getHomeDir } from '@/config/constants';
 import { importGitHubSkill } from '@/shared/skills/importer';
+import {
+  createSkill,
+  deleteSkill,
+  readSkill,
+  updateSkill,
+} from '@/shared/skills/manager';
 
 const execAsync = promisify(exec);
 
@@ -313,7 +319,7 @@ files.post('/read', async (c) => {
 /**
  * Get all skills directories
  * GET /files/skills-dir
- * Returns paths for both ~/.workany/skills and ~/.claude/skills
+ * Returns paths for both ~/.uniins-claw/skills and ~/.claude/skills
  */
 files.get('/skills-dir', async (c) => {
   const skillsDirs = getAllSkillsDirs();
@@ -329,8 +335,8 @@ files.get('/skills-dir', async (c) => {
       }
     } catch {
       // Directory doesn't exist
-      if (dir.name === 'workany') {
-        // Try to create workany skills dir
+      if (dir.name === 'uniins-claw') {
+        // Try to create uniins-claw skills dir
         try {
           await fs.mkdir(dir.path, { recursive: true });
           results.push({ name: dir.name, path: dir.path, exists: true });
@@ -398,6 +404,88 @@ files.post('/import-skill', async (c) => {
     const message = error instanceof Error ? error.message : String(error);
     const status = message.startsWith('TARGET_EXISTS|') ? 409 : 500;
     return c.json({ success: false, error: message }, status);
+  }
+});
+
+/**
+ * Create a local skill in a configured skills directory.
+ * POST /files/skills
+ * Body: { targetDir: string, folderName?: string, name: string, description?: string, content?: string }
+ */
+files.post('/skills', async (c) => {
+  try {
+    const body = await c.req.json<{
+      targetDir: string;
+      folderName?: string;
+      name: string;
+      description?: string;
+      content?: string;
+    }>();
+    const skill = await createSkill(body);
+    return c.json({ success: true, skill }, 201);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message.includes('already exists') ? 409 : 400;
+    return c.json({ success: false, error: message }, status);
+  }
+});
+
+/**
+ * Read a local skill.
+ * POST /files/skills/read
+ * Body: { path: string }
+ */
+files.post('/skills/read', async (c) => {
+  try {
+    const body = await c.req.json<{ path: string }>();
+    const skill = await readSkill(body.path);
+    return c.json({ success: true, skill });
+  } catch (error) {
+    return c.json(
+      { success: false, error: error instanceof Error ? error.message : String(error) },
+      400
+    );
+  }
+});
+
+/**
+ * Update a local skill's SKILL.md.
+ * PUT /files/skills
+ * Body: { skillPath: string, name: string, description?: string, content?: string }
+ */
+files.put('/skills', async (c) => {
+  try {
+    const body = await c.req.json<{
+      skillPath: string;
+      name: string;
+      description?: string;
+      content?: string;
+    }>();
+    const skill = await updateSkill(body);
+    return c.json({ success: true, skill });
+  } catch (error) {
+    return c.json(
+      { success: false, error: error instanceof Error ? error.message : String(error) },
+      400
+    );
+  }
+});
+
+/**
+ * Delete a local skill directory.
+ * POST /files/skills/delete
+ * Body: { path: string }
+ */
+files.post('/skills/delete', async (c) => {
+  try {
+    const body = await c.req.json<{ path: string }>();
+    await deleteSkill(body.path);
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json(
+      { success: false, error: error instanceof Error ? error.message : String(error) },
+      400
+    );
   }
 });
 

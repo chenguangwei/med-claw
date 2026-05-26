@@ -116,8 +116,12 @@ function getBundledNodePath(): string | undefined {
  */
 function getBundledCodexPath(): string | undefined {
   const os = platform();
-  const ext = os === 'win32' ? '.cmd' : '';
+  const ext = os === 'win32' ? '.exe' : '';
   const targetTriple = getTargetTriple();
+  const targetTriples =
+    os === 'win32'
+      ? ['-x86_64-pc-windows-msvc', '-x86_64-pc-windows-gnu']
+      : [targetTriple];
 
   // In packaged app, codex launcher is in the same directory as the running binary
   // or in Resources directory on macOS
@@ -133,7 +137,9 @@ function getBundledCodexPath(): string | undefined {
   if (execDir) {
     // Tauri adds target triple suffix to externalBin files
     // e.g., codex-aarch64-apple-darwin on Apple Silicon Mac
-    possiblePaths.push(path.join(execDir, `codex${targetTriple}${ext}`));
+    for (const suffix of targetTriples) {
+      possiblePaths.push(path.join(execDir, `codex${suffix}${ext}`));
+    }
 
     // Also try without suffix (for development or manual placement)
     possiblePaths.push(path.join(execDir, `codex${ext}`));
@@ -176,7 +182,9 @@ function getBundledCodexPath(): string | undefined {
   // Development: check dist directory relative to project root
   const devPaths = [
     path.join(process.cwd(), 'src-api', 'dist', `codex${ext}`),
-    path.join(process.cwd(), 'src-api', 'dist', `codex${targetTriple}${ext}`),
+    ...targetTriples.map((suffix) =>
+      path.join(process.cwd(), 'src-api', 'dist', `codex${suffix}${ext}`)
+    ),
   ];
   possiblePaths.push(...devPaths);
 

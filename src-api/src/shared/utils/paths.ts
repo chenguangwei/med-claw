@@ -1,7 +1,7 @@
 /**
- * Path utilities for WorkAny API
+ * Path utilities for uniins-claw API
  *
- * Uses ~/.workany/ as the standard data directory across all platforms.
+ * Uses ~/.uniins-claw/ as the standard data directory across all platforms.
  * This follows the Unix dotfile convention used by developer tools like:
  * - ~/.claude/ (Claude Code)
  * - ~/.npm/ (npm)
@@ -21,7 +21,7 @@ import {
 
 /**
  * Get the application data directory
- * Returns ~/.workany on all platforms
+ * Returns ~/.uniins-claw on all platforms
  */
 
 export function getAppDataDir(): string {

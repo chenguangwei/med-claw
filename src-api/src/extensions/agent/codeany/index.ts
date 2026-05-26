@@ -10,11 +10,17 @@ import { homedir, platform } from 'os';
 import { join } from 'path';
 import {
   createAgent as createSdkAgent,
+  defineTool,
+  filterTools,
   formatSkillsForPrompt,
+  getAllBaseTools,
   getSkill,
   query,
 } from '@codeany/open-agent-sdk';
-import type { AgentOptions as SdkAgentOptions } from '@codeany/open-agent-sdk';
+import type {
+  AgentOptions as SdkAgentOptions,
+  ToolDefinition as SdkToolDefinition,
+} from '@codeany/open-agent-sdk';
 
 import {
   BaseAgent,
@@ -45,10 +51,48 @@ import {
   DEFAULT_WORK_DIR,
 } from '@/config/constants';
 import { loadMcpServers } from '@/shared/mcp/loader';
+import { searchWebForAgent } from '@/shared/services/web-search';
 import { syncSdkSkills } from '@/shared/skills/loader';
 import { createLogger, LOG_FILE_PATH } from '@/shared/utils/logger';
 
 const logger = createLogger('CodeAnyAgent');
+
+const ResilientWebSearchTool = defineTool({
+  name: 'WebSearch',
+  description:
+    'Search the web for information. Returns search results with titles, URLs, and snippets.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'The search query',
+      },
+      num_results: {
+        type: 'number',
+        description: 'Number of results to return (default: 5)',
+      },
+    },
+    required: ['query'],
+  },
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  async call(input) {
+    return searchWebForAgent(
+      String(input.query || ''),
+      Number(input.num_results) || 5
+    );
+  },
+});
+
+function getCodeAnyBaseTools(
+  allowedTools?: string[]
+): SdkToolDefinition[] {
+  const tools = getAllBaseTools().map((tool) =>
+    tool.name === 'WebSearch' ? ResilientWebSearchTool : tool
+  );
+  return filterTools(tools, allowedTools);
+}
 
 // Sandbox API URL
 const isDev = !process.env.NODE_ENV || process.env.NODE_ENV === 'development';
@@ -234,6 +278,7 @@ export class CodeAnyAgent extends BaseAgent {
     const sdkOpts: SdkAgentOptions = {
       cwd: sessionCwd,
       model: this.config.model,
+      tools: getCodeAnyBaseTools(allowedTools),
       permissionMode: 'bypassPermissions',
       maxTurns: 200,
       thinking: { type: 'adaptive' },
@@ -450,9 +495,14 @@ export class CodeAnyAgent extends BaseAgent {
       type: string;
       message?: { content?: unknown[] };
       subtype?: string;
+      session_id?: string;
+      is_error?: boolean;
+      num_turns?: number;
+      result?: string | { tool_use_id?: string; tool_name?: string; output?: string };
+      stop_reason?: string | null;
+      errors?: string[];
       total_cost_usd?: number;
       duration_ms?: number;
-      result?: { tool_use_id?: string; tool_name?: string; output?: string };
     };
 
     if (msg.type === 'assistant' && msg.message?.content) {
@@ -479,7 +529,11 @@ export class CodeAnyAgent extends BaseAgent {
       }
     }
 
-    if (msg.type === 'tool_result' && msg.result) {
+    if (
+      msg.type === 'tool_result' &&
+      msg.result &&
+      typeof msg.result === 'object'
+    ) {
       yield {
         type: 'tool_result',
         toolUseId: msg.result.tool_use_id ?? '',
@@ -489,9 +543,17 @@ export class CodeAnyAgent extends BaseAgent {
     }
 
     if (msg.type === 'result') {
+      const resultText = typeof msg.result === 'string' ? msg.result : undefined;
       yield {
         type: 'result',
-        content: msg.subtype,
+        content: resultText || msg.subtype,
+        subtype: msg.subtype,
+        sessionId: msg.session_id,
+        isError: msg.is_error,
+        numTurns: msg.num_turns,
+        result: resultText,
+        stopReason: msg.stop_reason,
+        errors: msg.errors,
         cost: msg.total_cost_usd,
         duration: msg.duration_ms,
       };

@@ -11,6 +11,7 @@ import {
   previewRoutes,
   providersRoutes,
   sandboxRoutes,
+  scheduledTasksRoutes,
 } from '@/app/api';
 import { corsMiddleware } from '@/app/middleware/index.js';
 import { loadConfig } from '@/config/loader.js';
@@ -19,6 +20,7 @@ import {
   shutdownProviderManager,
 } from '@/shared/provider/manager';
 import { getPreviewManager } from '@/shared/services/preview';
+import { startScheduledTaskRunner, stopScheduledTaskRunner } from '@/shared/scheduled/service';
 
 const app = new Hono();
 
@@ -34,11 +36,12 @@ app.route('/preview', previewRoutes);
 app.route('/providers', providersRoutes);
 app.route('/files', filesRoutes);
 app.route('/mcp', mcpRoutes);
+app.route('/scheduled-tasks', scheduledTasksRoutes);
 
 // Root endpoint
 app.get('/', (c) => {
   return c.json({
-    name: 'WorkAny API',
+    name: 'uniins-claw API',
     version: '0.1.1',
     endpoints: {
       health: '/health',
@@ -48,6 +51,7 @@ app.get('/', (c) => {
       providers: '/providers',
       files: '/files',
       mcp: '/mcp',
+      scheduledTasks: '/scheduled-tasks',
     },
   });
 });
@@ -86,6 +90,8 @@ const cleanup = async () => {
     console.error('Error shutting down provider manager:', error);
   }
 
+  stopScheduledTaskRunner();
+
   if (server) {
     server.close();
     server = null;
@@ -103,17 +109,19 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Initialize and start server
 async function start() {
-  console.log(`🚀 WorkAny API starting...`);
+  console.log(`🚀 uniins-claw API starting...`);
 
   // Load configuration
   await loadConfig();
 
-  // Install built-in skills to ~/.workany/skills/
+  // Install built-in skills to ~/.uniins-claw/skills/
   const { installBuiltinSkills } = await import('@/shared/skills/loader');
   await installBuiltinSkills();
 
   // Initialize provider manager
   await initProviderManager();
+
+  startScheduledTaskRunner();
 
   console.log(`🚀 Server starting on http://localhost:${port}`);
 

@@ -48,6 +48,12 @@ export interface AgentMessage {
   isError?: boolean;
   // Plan fields
   plan?: TaskPlan;
+  // Result fields
+  subtype?: string;
+  result?: string;
+  stopReason?: string | null;
+  numTurns?: number;
+  errors?: string[];
   // Error fields
   message?: string;
 }
@@ -130,7 +136,7 @@ export interface McpConfig {
   enabled: boolean;
   /** Whether to load MCP servers from user directory (claude config) */
   userDirEnabled: boolean;
-  /** Whether to load MCP servers from app directory (workany config) */
+  /** Whether to load MCP servers from app directory (uniins-claw config) */
   appDirEnabled: boolean;
   /** Custom MCP config file path (legacy support) */
   mcpConfigPath?: string;

@@ -219,7 +219,7 @@ export function SkillsSettings({
     async (skillsPath: string) => {
       setLoading(true);
       try {
-        // Get all skills directories (workany and claude)
+        // Get all skills directories (uniins-claw and claude)
         const dirsResponse = await fetch(`${API_BASE_URL}/files/skills-dir`);
         const dirsData = await dirsResponse.json();
 
@@ -235,7 +235,7 @@ export function SkillsSettings({
           }[]) {
             if (dir.name === 'claude') {
               dirs.user = dir.path;
-            } else if (dir.name === 'workany') {
+            } else if (dir.name === 'uniins-claw') {
               dirs.app = dir.path;
             }
           }
@@ -245,7 +245,7 @@ export function SkillsSettings({
         const loadSkillDirectory = async (
           rootPath: string,
           idPrefix: string,
-          source: 'claude' | 'workany',
+          source: 'claude' | 'uniins-claw',
           enabled: boolean
         ) => {
           const filesResponse = await fetch(`${API_BASE_URL}/files/readdir`, {
@@ -295,7 +295,7 @@ export function SkillsSettings({
           }
         };
 
-        // Load skills from both user and WorkAny app directories.
+        // Load skills from both user and uniins-claw app directories.
         if (dirsData.directories) {
           for (const dir of dirsData.directories as {
             name: string;
@@ -303,7 +303,7 @@ export function SkillsSettings({
             exists: boolean;
           }[]) {
             if (!dir.exists) continue;
-            const source = dir.name === 'claude' ? 'claude' : 'workany';
+            const source = dir.name === 'claude' ? 'claude' : 'uniins-claw';
             const enabled =
               dir.name === 'claude'
                 ? settings.skillsUserDirEnabled !== false
@@ -329,7 +329,7 @@ export function SkillsSettings({
               await loadSkillDirectory(
                 skillsPath,
                 'custom',
-                'workany',
+                'uniins-claw',
                 settings.skillsEnabled !== false
               );
             } catch (err) {

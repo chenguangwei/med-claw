@@ -25,6 +25,10 @@ export interface ImportSkillResult {
   skillName: string;
   path: string;
   sourceUrl: string;
+  validation: {
+    hasSkillFile: boolean;
+    trustedSource: boolean;
+  };
 }
 
 function sanitizeSkillName(name: string): string {
@@ -132,7 +136,7 @@ export async function importGitHubSkill(
     throw new Error(`TARGET_EXISTS|${destDir}`);
   }
 
-  const tempRoot = await fs.mkdtemp(path.join(tmpdir(), 'workany-skill-'));
+  const tempRoot = await fs.mkdtemp(path.join(tmpdir(), 'uniins-claw-skill-'));
   const repoDir = path.join(tempRoot, source.repo);
   const repoUrl = `https://github.com/${source.owner}/${source.repo}.git`;
   const cloneArgs = ['clone', '--depth', '1'];
@@ -150,6 +154,10 @@ export async function importGitHubSkill(
       skillName,
       path: destDir,
       sourceUrl: options.url,
+      validation: {
+        hasSkillFile: await pathExists(path.join(destDir, 'SKILL.md')),
+        trustedSource: source.owner === 'anthropics' || source.owner === 'openai',
+      },
     };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });

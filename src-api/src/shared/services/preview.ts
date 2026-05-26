@@ -13,7 +13,7 @@ import * as path from 'path';
 
 export interface PreviewConfig {
   taskId: string;
-  workDir: string; // Host path: ~/.workany/sessions/{taskId}
+  workDir: string; // Host path: ~/.uniins-claw/sessions/{taskId}
   port?: number; // Preferred port (auto-assign if unavailable)
 }
 

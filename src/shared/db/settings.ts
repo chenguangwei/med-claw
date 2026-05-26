@@ -200,7 +200,7 @@ export interface Settings {
   mcpConfigPath: string;
   mcpEnabled: boolean; // Enable MCP mounting during agent conversations
   mcpUserDirEnabled: boolean; // Enable loading MCP servers from user directory (claude config)
-  mcpAppDirEnabled: boolean; // Enable loading MCP servers from app directory (workany config)
+  mcpAppDirEnabled: boolean; // Enable loading MCP servers from app directory (uniins-claw config)
 
   // Skills settings
   skillsPath: string;
@@ -237,6 +237,47 @@ export interface Settings {
 
 // Default providers with full configuration
 export const defaultProviders: AIProvider[] = [
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    apiKey: '',
+    baseUrl: 'https://api.deepseek.com',
+    enabled: true,
+    models: [
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'deepseek-chat',
+      'deepseek-reasoner',
+    ],
+    apiType: 'openai-completions',
+    icon: 'D',
+    apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+    canDelete: true,
+  },
+  {
+    id: 'qwen',
+    name: '千问 (Qwen)',
+    apiKey: '',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    enabled: true,
+    models: ['qwen3-max', 'qwen-plus', 'qwen-turbo'],
+    apiType: 'openai-completions',
+    icon: 'Q',
+    apiKeyUrl: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
+    canDelete: true,
+  },
+  {
+    id: 'zhipu',
+    name: '智谱 GLM',
+    apiKey: '',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    enabled: true,
+    models: ['glm-5.1', 'glm-4.7', 'glm-4-plus', 'glm-4.5'],
+    apiType: 'openai-completions',
+    icon: '智',
+    apiKeyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
+    canDelete: true,
+  },
   {
     id: 'openrouter',
     name: 'OpenRouter',
@@ -295,7 +336,7 @@ export const defaultProviders: AIProvider[] = [
     models: ['claude-sonnet-4-5-20250929'],
     apiType: 'anthropic-messages',
     icon: '3',
-    apiKeyUrl: 'https://302.ai/?utm_source=workany_desktop',
+    apiKeyUrl: 'https://302.ai/?utm_source=uniins-claw_desktop',
     canDelete: true,
   },
   {
@@ -364,11 +405,16 @@ export const customProviderModels: Record<string, string[]> = {
     'doubao-1-5-lite-32k-250115',
     'deepseek-v3-250324',
   ],
-  deepseek: ['deepseek-chat', 'deepseek-coder', 'deepseek-reasoner'],
+  deepseek: [
+    'deepseek-v4-pro',
+    'deepseek-v4-flash',
+    'deepseek-chat',
+    'deepseek-reasoner',
+  ],
   kimi: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
   moonshot: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
-  zhipu: ['glm-4-plus', 'glm-4-flash', 'glm-4-long'],
-  qwen: ['qwen-max', 'qwen-plus', 'qwen-turbo'],
+  zhipu: ['glm-5.1', 'glm-4.7', 'glm-4-plus', 'glm-4.5'],
+  qwen: ['qwen3-max', 'qwen-plus', 'qwen-turbo'],
   siliconflow: [
     'deepseek-ai/DeepSeek-V3',
     'deepseek-ai/DeepSeek-V3.1-Terminus',
@@ -392,7 +438,7 @@ export const customProviderModels: Record<string, string[]> = {
 
 // Default settings
 // Note: Path values are placeholders that get resolved at initialization
-// to platform-specific paths (e.g., ~/Library/Application Support/workany on macOS)
+// to platform-specific paths (e.g., ~/Library/Application Support/uniins-claw on macOS)
 export const defaultSettings: Settings = {
   profile: {
     nickname: 'Guest User',
@@ -423,7 +469,7 @@ export const defaultSettings: Settings = {
   language: '', // Empty string triggers system language detection on first run
 };
 
-const DB_NAME = 'sqlite:workany.db';
+const DB_NAME = 'sqlite:uniins-claw.db';
 
 // Check if running in Tauri environment synchronously
 function isTauriSync(): boolean {
@@ -527,7 +573,7 @@ export async function getSettingsAsync(): Promise<Settings> {
 
   // Fallback to localStorage for browser mode
   try {
-    const stored = localStorage.getItem('workany_settings');
+    const stored = localStorage.getItem('uniins-claw_settings');
     if (stored) {
       const loadedSettings = { ...defaultSettings, ...JSON.parse(stored) };
       // Migration: Add missing default providers
@@ -550,7 +596,7 @@ export async function getSettingsAsync(): Promise<Settings> {
       settingsCache = loadedSettings;
       return loadedSettings;
     } else {
-      console.log('[Settings] localStorage has no workany_settings');
+      console.log('[Settings] localStorage has no uniins-claw_settings');
     }
   } catch (error) {
     console.error('[Settings] Failed to load from localStorage:', error);
@@ -573,7 +619,7 @@ export function getSettings(): Settings {
 
   // Try localStorage first for immediate sync access
   try {
-    const stored = localStorage.getItem('workany_settings');
+    const stored = localStorage.getItem('uniins-claw_settings');
     if (stored) {
       const loadedSettings = { ...defaultSettings, ...JSON.parse(stored) };
       // Migration: Add missing default providers
@@ -615,7 +661,10 @@ export async function saveSettingsAsync(settings: Settings): Promise<void> {
 
   const database = await getDatabase();
 
-  console.log('[Settings] saveSettingsAsync - database:', database ? 'connected' : 'null');
+  console.log(
+    '[Settings] saveSettingsAsync - database:',
+    database ? 'connected' : 'null'
+  );
 
   if (database) {
     try {
@@ -628,17 +677,22 @@ export async function saveSettingsAsync(settings: Settings): Promise<void> {
           [key, value]
         );
       }
-      console.log('[Settings] saveSettingsAsync - saved successfully to database, defaultProvider:', settings.defaultProvider);
+      console.log(
+        '[Settings] saveSettingsAsync - saved successfully to database, defaultProvider:',
+        settings.defaultProvider
+      );
     } catch (error) {
       console.error('[Settings] Failed to save to database:', error);
     }
   } else {
-    console.warn('[Settings] saveSettingsAsync - database not available, only saving to cache/localStorage');
+    console.warn(
+      '[Settings] saveSettingsAsync - database not available, only saving to cache/localStorage'
+    );
   }
 
   // Also save to localStorage as fallback
   try {
-    localStorage.setItem('workany_settings', JSON.stringify(settings));
+    localStorage.setItem('uniins-claw_settings', JSON.stringify(settings));
   } catch (error) {
     console.error('[Settings] Failed to save to localStorage:', error);
   }
@@ -656,7 +710,7 @@ export function saveSettings(settings: Settings): void {
 
   // Save to localStorage immediately for sync access
   try {
-    localStorage.setItem('workany_settings', JSON.stringify(settings));
+    localStorage.setItem('uniins-claw_settings', JSON.stringify(settings));
     console.log('[Settings] Saved to localStorage successfully');
   } catch (error) {
     console.error('[Settings] Failed to save to localStorage:', error);
@@ -931,7 +985,7 @@ export async function saveSettingItem(
 
   // Also save to localStorage
   try {
-    localStorage.setItem(`workany_${key}`, value);
+    localStorage.setItem(`uniins-claw_${key}`, value);
   } catch (error) {
     console.error(`[Settings] Failed to save ${key} to localStorage:`, error);
   }
@@ -959,7 +1013,7 @@ export async function getSettingItem(key: string): Promise<string | null> {
 
   // Fallback to localStorage
   try {
-    return localStorage.getItem(`workany_${key}`);
+    return localStorage.getItem(`uniins-claw_${key}`);
   } catch {
     return null;
   }
@@ -994,7 +1048,7 @@ export async function clearAllSettings(): Promise<void> {
   try {
     const keys = Object.keys(localStorage);
     for (const key of keys) {
-      if (key.startsWith('workany')) {
+      if (key.startsWith('uniins-claw')) {
         localStorage.removeItem(key);
       }
     }

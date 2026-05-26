@@ -29,6 +29,7 @@ import {
   BriefcaseBusiness,
   Calculator,
   Calendar,
+  CalendarCheck,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
@@ -48,7 +49,9 @@ import {
   Mic,
   MoreHorizontal,
   PanelLeft,
+  PauseCircle,
   Pencil,
+  Play,
   Plus,
   Puzzle,
   Search,
@@ -60,16 +63,20 @@ import {
   Star,
   Trash2,
   User,
+  UsersRound,
+  X,
 } from 'lucide-react';
 
 import { LogoMark, LogoWordmark } from '@/components/common/logo';
 import { SettingsModal } from '@/components/settings';
 import { API_BASE_URL } from '@/components/settings/constants';
+import { MCPSettings } from '@/components/settings/tabs/MCPSettings';
 import type { SettingsCategory } from '@/components/settings/types';
 import { SkillsPlaza } from '@/components/skills/SkillsPlaza';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -112,7 +119,7 @@ interface SidebarAssistant {
   mcps?: string[];
 }
 
-const CUSTOM_ASSISTANTS_STORAGE_KEY = 'workany:custom-assistants';
+const CUSTOM_ASSISTANTS_STORAGE_KEY = 'uniins-claw:custom-assistants';
 
 const BUILT_IN_ASSISTANTS = [
   {
@@ -235,7 +242,7 @@ function filterAssistantOptions<
 
 function dispatchAssistantSelection(assistant: SidebarAssistant) {
   window.dispatchEvent(
-    new CustomEvent('workany:assistant-selected', {
+    new CustomEvent('uniins-claw:assistant-selected', {
       detail: {
         assistantId: assistant.id,
         assistantName: assistant.name,
@@ -244,6 +251,12 @@ function dispatchAssistantSelection(assistant: SidebarAssistant) {
         mcps: assistant.mcps ?? [],
       },
     })
+  );
+}
+
+function dispatchCollaborationSessionStart() {
+  window.dispatchEvent(
+    new CustomEvent('uniins-claw:collaboration-session-start')
   );
 }
 
@@ -806,7 +819,12 @@ function SettingsInlinePanel({
   }
 
   if (category === 'mcp') {
-    return <AIAbilityPlazaPanel />;
+    return (
+      <AIAbilityPlazaPanel
+        settings={settings}
+        onSettingsChange={onSettingsChange}
+      />
+    );
   }
 
   return (
@@ -842,6 +860,15 @@ interface AIAbility {
   icon: React.ComponentType<{ className?: string }>;
   accent: string;
 }
+
+type AIAbilityTab = 'overview' | 'official' | 'connected' | 'manage';
+
+const aiAbilityTabs: Array<{ key: AIAbilityTab; label: string }> = [
+  { key: 'overview', label: '能力总览' },
+  { key: 'official', label: '官方能力' },
+  { key: 'connected', label: '已接入' },
+  { key: 'manage', label: '能力管理' },
+];
 
 const abilityCategories: AbilityCategoryKey[] = [
   '全部',
@@ -934,12 +961,20 @@ const aiAbilities: AIAbility[] = [
   },
 ];
 
-function AIAbilityPlazaPanel() {
+function AIAbilityPlazaPanel({
+  settings,
+  onSettingsChange,
+}: {
+  settings: SettingsType;
+  onSettingsChange: (settings: SettingsType) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<AIAbilityTab>('overview');
   const [activeCategory, setActiveCategory] =
     useState<AbilityCategoryKey>('全部');
   const [searchQuery, setSearchQuery] = useState('');
 
   const visibleAbilities = aiAbilities.filter((ability) => {
+    if (activeTab === 'connected' && !ability.connected) return false;
     const matchesCategory =
       activeCategory === '全部' || ability.category === activeCategory;
     const query = searchQuery.trim().toLowerCase();
@@ -987,18 +1022,20 @@ function AIAbilityPlazaPanel() {
 
       <div className="shrink-0 border-b border-slate-200 bg-white">
         <div className="flex h-14 items-center gap-10 px-12">
-          {['能力总览', '官方能力', '已接入', '能力管理'].map((tab, index) => (
+          {aiAbilityTabs.map((tab) => (
             <button
-              key={tab}
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
               className={cn(
                 'relative h-full px-1 text-base font-semibold transition',
-                index === 0
+                activeTab === tab.key
                   ? 'text-orange-600'
                   : 'text-slate-600 hover:text-slate-950'
               )}
             >
-              {tab}
-              {index === 0 && (
+              {tab.label}
+              {activeTab === tab.key && (
                 <span className="absolute bottom-0 left-0 h-0.5 w-full rounded-full bg-orange-600" />
               )}
             </button>
@@ -1006,47 +1043,72 @@ function AIAbilityPlazaPanel() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-10 py-5">
-        <div className="mb-5 flex items-center gap-4 overflow-x-auto pb-1">
-          {abilityCategories.map((category) => (
-            <button
-              key={category}
-              onClick={() => setActiveCategory(category)}
-              className={cn(
-                'h-10 shrink-0 rounded-full border px-5 text-sm font-medium transition',
-                activeCategory === category
-                  ? 'border-orange-200 bg-orange-50 text-orange-600'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-950'
-              )}
-            >
-              {category}
-            </button>
-          ))}
-          <button className="ml-auto flex h-10 shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-5 text-sm font-medium text-slate-600">
-            更多分类
-            <ArrowRight className="size-4" />
-          </button>
+      {activeTab === 'manage' ? (
+        <div className="min-h-0 flex-1 overflow-hidden bg-slate-50 px-10 py-6">
+          <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 className="text-lg font-bold tracking-normal text-slate-950">
+              MCP 能力管理
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              这里直接读写本机 uniins-claw MCP
+              配置，支持新增、导入、修改和删除，保存后写入真实 mcp.json。
+            </p>
+          </div>
+          <div className="h-[calc(100%-116px)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <MCPSettings
+              settings={settings}
+              onSettingsChange={onSettingsChange}
+            />
+          </div>
         </div>
-
-        {visibleAbilities.length === 0 ? (
-          <div className="flex h-60 items-center justify-center rounded-2xl border border-dashed border-slate-200 text-sm text-slate-500">
-            没有匹配的 AI 能力
-          </div>
-        ) : (
-          <div className="grid grid-cols-12 items-start gap-4">
-            {featuredAbility && (
-              <AIAbilityCard ability={featuredAbility} featured />
-            )}
-            {regularAbilities.map((ability, index) => (
-              <AIAbilityCard
-                key={ability.id}
-                ability={ability}
-                wide={index === 0 || index === 3}
-              />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto px-10 py-5">
+          <div className="mb-5 flex items-center gap-4 overflow-x-auto pb-1">
+            {abilityCategories.map((category) => (
+              <button
+                key={category}
+                onClick={() => setActiveCategory(category)}
+                className={cn(
+                  'h-10 shrink-0 rounded-full border px-5 text-sm font-medium transition',
+                  activeCategory === category
+                    ? 'border-orange-200 bg-orange-50 text-orange-600'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-950'
+                )}
+              >
+                {category}
+              </button>
             ))}
+            <button className="ml-auto flex h-10 shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-5 text-sm font-medium text-slate-600">
+              更多分类
+              <ArrowRight className="size-4" />
+            </button>
           </div>
-        )}
-      </div>
+
+          {visibleAbilities.length === 0 ? (
+            <div className="flex h-60 items-center justify-center rounded-2xl border border-dashed border-slate-200 text-sm text-slate-500">
+              没有匹配的 AI 能力
+            </div>
+          ) : (
+            <div className="grid grid-cols-12 items-start gap-4">
+              {featuredAbility && (
+                <AIAbilityCard
+                  ability={featuredAbility}
+                  featured
+                  onManage={() => setActiveTab('manage')}
+                />
+              )}
+              {regularAbilities.map((ability, index) => (
+                <AIAbilityCard
+                  key={ability.id}
+                  ability={ability}
+                  wide={index === 0 || index === 3}
+                  onManage={() => setActiveTab('manage')}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1055,10 +1117,12 @@ function AIAbilityCard({
   ability,
   featured,
   wide,
+  onManage,
 }: {
   ability: AIAbility;
   featured?: boolean;
   wide?: boolean;
+  onManage: () => void;
 }) {
   const Icon = ability.icon;
 
@@ -1097,7 +1161,8 @@ function AIAbilityCard({
             </span>
           )}
           {ability.connected && (
-            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+              <CircleCheck className="size-3.5" />
               已接入
             </span>
           )}
@@ -1129,7 +1194,17 @@ function AIAbilityCard({
           <span className="truncate font-semibold">{ability.provider}</span>
           <span className="truncate">{ability.usage}</span>
         </div>
-        <button className="h-9 shrink-0 rounded-xl border border-orange-500 px-5 text-sm font-semibold text-orange-600 transition hover:bg-orange-50">
+        <button
+          type="button"
+          onClick={onManage}
+          className={cn(
+            'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-5 text-sm font-semibold transition',
+            ability.connected
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              : 'border-orange-500 text-orange-600 hover:bg-orange-50'
+          )}
+        >
+          {ability.connected && <CircleCheck className="size-4" />}
           {ability.connected ? '管理' : '接入'}
         </button>
       </div>
@@ -1505,50 +1580,1113 @@ function WorkspacePanel({
   );
 }
 
+type ScheduledTaskSchedule =
+  | { type: 'daily'; time: string }
+  | { type: 'weekly'; time: string; daysOfWeek: number[] }
+  | { type: 'interval'; intervalMinutes: number };
+
+type ScheduledTaskStatus = 'enabled' | 'paused';
+
+interface ScheduledTaskItem {
+  id: string;
+  name: string;
+  prompt: string;
+  status: ScheduledTaskStatus;
+  schedule: ScheduledTaskSchedule;
+  skillNames: string[];
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ScheduledTaskRunItem {
+  id: string;
+  taskId: string;
+  status: 'queued' | 'running' | 'success' | 'failed';
+  startedAt: string;
+  finishedAt: string | null;
+  summary: string | null;
+  error: string | null;
+  messages?: ScheduledTaskRunMessage[];
+}
+
+interface ScheduledTaskRunMessage {
+  type: string;
+  sessionId?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  message?: string;
+  content?: string;
+  toolUseId?: string;
+  output?: string;
+  isError?: boolean;
+  subtype?: string;
+  result?: string;
+  stopReason?: string | null;
+  numTurns?: number;
+  errors?: string[];
+  cost?: number;
+  duration?: number;
+}
+
+interface ScheduledSkillOption {
+  id: string;
+  name: string;
+  path: string;
+  enabled: boolean;
+}
+
+const SCHEDULE_WEEKDAYS = [
+  { value: 1, label: '一' },
+  { value: 2, label: '二' },
+  { value: 3, label: '三' },
+  { value: 4, label: '四' },
+  { value: 5, label: '五' },
+  { value: 6, label: '六' },
+  { value: 0, label: '日' },
+];
+
+const createEmptyScheduledTaskForm = () => ({
+  id: '',
+  name: '',
+  prompt: '',
+  status: 'enabled' as ScheduledTaskStatus,
+  scheduleType: 'daily' as 'daily' | 'weekly' | 'interval',
+  time: '10:00',
+  daysOfWeek: [1, 2, 3, 4, 5],
+  intervalMinutes: 60,
+  skillNames: [] as string[],
+});
+
+function getScheduledTaskExecutionPayload() {
+  const settings = getSettings();
+  const provider = settings.providers.find(
+    (item) => item.id === settings.defaultProvider
+  );
+  const modelConfig =
+    provider?.apiKey && settings.defaultModel
+      ? {
+          apiKey: provider.apiKey,
+          baseUrl: provider.baseUrl || undefined,
+          model: settings.defaultModel,
+          apiType: provider.apiType,
+        }
+      : undefined;
+
+  return {
+    modelConfig,
+    sandboxConfig: settings.sandboxEnabled
+      ? {
+          enabled: true,
+          provider: settings.defaultSandboxProvider,
+          apiEndpoint: API_BASE_URL,
+        }
+      : undefined,
+    skillsConfig: {
+      enabled: settings.skillsEnabled !== false,
+      userDirEnabled: settings.skillsUserDirEnabled !== false,
+      appDirEnabled: settings.skillsAppDirEnabled !== false,
+      skillsPath: settings.skillsPath || undefined,
+    },
+    mcpConfig:
+      settings.mcpEnabled === false
+        ? undefined
+        : {
+            enabled: true,
+            userDirEnabled: settings.mcpUserDirEnabled !== false,
+            appDirEnabled: settings.mcpAppDirEnabled !== false,
+            mcpConfigPath: settings.mcpConfigPath || undefined,
+          },
+    workDir: settings.workDir || undefined,
+    language: settings.language || 'zh',
+  };
+}
+
 function ScheduledTasksPanel() {
-  const suggestions = [
-    '设置每天 10:00的定时任务，为我推送一篇优质AI文章的核心观点摘要',
-    '每周一至周五 10:00，为我定点推送 20 个高频英语单词 + 例句，明日起长期生效。',
-    '设置每天为我推送当天最新的10条科技新闻，每条新闻总结精简，重复频率：每日，任务立即启用',
-  ];
+  const [tasks, setTasks] = useState<ScheduledTaskItem[]>([]);
+  const [skills, setSkills] = useState<ScheduledSkillOption[]>([]);
+  const [runs, setRuns] = useState<ScheduledTaskRunItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [runningTaskId, setRunningTaskId] = useState<string | null>(null);
+  const [togglingTaskId, setTogglingTaskId] = useState<string | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [runsOpen, setRunsOpen] = useState(false);
+  const [activeTask, setActiveTask] = useState<ScheduledTaskItem | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [taskPendingDelete, setTaskPendingDelete] =
+    useState<ScheduledTaskItem | null>(null);
+  const [form, setForm] = useState(createEmptyScheduledTaskForm);
+
+  const loadTasks = async (options: { showLoading?: boolean } = {}) => {
+    const showLoading = options.showLoading !== false;
+    if (showLoading) setLoading(true);
+    setError('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/scheduled-tasks`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '加载定时任务失败');
+      setTasks(Array.isArray(data.tasks) ? data.tasks : []);
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error ? loadError.message : '加载失败';
+      const isNetworkFailure =
+        message === 'Load failed' ||
+        message === 'Failed to fetch' ||
+        message.includes('NetworkError');
+      setError(
+        isNetworkFailure
+          ? `无法连接本地服务，请确认 API 服务已启动：${API_BASE_URL}`
+          : message
+      );
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  };
+
+  const loadSkills = async () => {
+    try {
+      const dirsResponse = await fetch(`${API_BASE_URL}/files/skills-dir`);
+      const dirsData = await dirsResponse.json();
+      const nextSkills: ScheduledSkillOption[] = [];
+
+      for (const dir of (dirsData.directories || []) as {
+        name: string;
+        path: string;
+        exists: boolean;
+      }[]) {
+        if (!dir.exists) continue;
+        const filesResponse = await fetch(`${API_BASE_URL}/files/readdir`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: dir.path, maxDepth: 2 }),
+        });
+        const filesData = await filesResponse.json();
+        if (!filesData.success || !Array.isArray(filesData.files)) continue;
+
+        for (const folder of filesData.files) {
+          if (!folder.isDir) continue;
+          let name = folder.name;
+          try {
+            const mdResponse = await fetch(`${API_BASE_URL}/files/read`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: `${folder.path}/SKILL.md` }),
+            });
+            const mdData = await mdResponse.json();
+            const nameMatch = String(mdData.content || '').match(
+              /^name:\s*(.+)$/m
+            );
+            if (mdData.success && nameMatch?.[1]) {
+              name = nameMatch[1].replace(/^["']|["']$/g, '').trim();
+            }
+          } catch {
+            // Directory name is good enough when metadata is unavailable.
+          }
+          nextSkills.push({
+            id: `${dir.name}-${folder.name}`,
+            name,
+            path: folder.path,
+            enabled: true,
+          });
+        }
+      }
+
+      setSkills(nextSkills);
+    } catch {
+      setSkills([]);
+    }
+  };
+
+  useEffect(() => {
+    void loadTasks();
+    void loadSkills();
+  }, []);
+
+  const openCreateEditor = () => {
+    setActiveTask(null);
+    setForm(createEmptyScheduledTaskForm());
+    setEditorOpen(true);
+  };
+
+  const openEditEditor = (task: ScheduledTaskItem) => {
+    setActiveTask(task);
+    setForm({
+      id: task.id,
+      name: task.name,
+      prompt: task.prompt,
+      status: task.status,
+      scheduleType: task.schedule.type,
+      time: 'time' in task.schedule ? task.schedule.time : '10:00',
+      daysOfWeek:
+        task.schedule.type === 'weekly'
+          ? task.schedule.daysOfWeek
+          : [1, 2, 3, 4, 5],
+      intervalMinutes:
+        task.schedule.type === 'interval' ? task.schedule.intervalMinutes : 60,
+      skillNames: task.skillNames || [],
+    });
+    setEditorOpen(true);
+  };
+
+  const buildSchedule = (): ScheduledTaskSchedule => {
+    if (form.scheduleType === 'interval') {
+      return {
+        type: 'interval',
+        intervalMinutes: Math.max(1, Number(form.intervalMinutes) || 60),
+      };
+    }
+    if (form.scheduleType === 'weekly') {
+      return {
+        type: 'weekly',
+        time: form.time,
+        daysOfWeek: form.daysOfWeek.length ? form.daysOfWeek : [1],
+      };
+    }
+    return {
+      type: 'daily',
+      time: form.time,
+    };
+  };
+
+  const saveTask = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const payload = {
+        name: form.name,
+        prompt: form.prompt,
+        status: form.status,
+        schedule: buildSchedule(),
+        skillNames: form.skillNames,
+      };
+      const response = await fetch(
+        activeTask
+          ? `${API_BASE_URL}/scheduled-tasks/${activeTask.id}`
+          : `${API_BASE_URL}/scheduled-tasks`,
+        {
+          method: activeTask ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '保存失败');
+      setEditorOpen(false);
+      await loadTasks();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createExampleTask = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/scheduled-tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: '每日客户跟进摘要',
+          prompt:
+            '每天上午汇总昨日客户跟进记录，提炼需要今天处理的重点客户、待补资料和下一步沟通建议。',
+          status: 'enabled',
+          schedule: {
+            type: 'daily',
+            time: '09:30',
+          },
+          skillNames: [],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '创建示例任务失败');
+      await loadTasks();
+    } catch (createError) {
+      setError(
+        createError instanceof Error ? createError.message : '创建示例任务失败'
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteTask = async (task: ScheduledTaskItem) => {
+    setError('');
+    setDeletingTaskId(task.id);
+    const previousTasks = tasks;
+    setTasks((current) => current.filter((item) => item.id !== task.id));
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/scheduled-tasks/${task.id}`,
+        {
+          method: 'DELETE',
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '删除失败');
+      setTaskPendingDelete(null);
+      await loadTasks();
+    } catch (deleteError) {
+      setTasks(previousTasks);
+      setError(deleteError instanceof Error ? deleteError.message : '删除失败');
+    } finally {
+      setDeletingTaskId(null);
+    }
+  };
+
+  const toggleTaskStatus = async (task: ScheduledTaskItem) => {
+    const nextStatus: ScheduledTaskStatus =
+      task.status === 'enabled' ? 'paused' : 'enabled';
+    const previousTasks = tasks;
+    setTogglingTaskId(task.id);
+    setError('');
+    setTasks((current) =>
+      current.map((item) =>
+        item.id === task.id
+          ? {
+              ...item,
+              status: nextStatus,
+              nextRunAt: nextStatus === 'paused' ? null : item.nextRunAt,
+            }
+          : item
+      )
+    );
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/scheduled-tasks/${task.id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: nextStatus }),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '状态切换失败');
+      setTasks((current) =>
+        current.map((item) => (item.id === task.id ? data.task : item))
+      );
+      if (activeTask?.id === task.id) {
+        setActiveTask(data.task);
+      }
+    } catch (toggleError) {
+      setTasks(previousTasks);
+      setError(
+        toggleError instanceof Error ? toggleError.message : '状态切换失败'
+      );
+    } finally {
+      setTogglingTaskId(null);
+    }
+  };
+
+  const runTaskNow = async (task: ScheduledTaskItem) => {
+    setRunningTaskId(task.id);
+    setError('');
+    try {
+      await syncSettingsWithBackend();
+      const response = await fetch(
+        `${API_BASE_URL}/scheduled-tasks/${task.id}/run`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getScheduledTaskExecutionPayload()),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '执行失败');
+      await loadTasks();
+      await openRuns(task, data.run?.id);
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : '执行失败');
+    } finally {
+      setRunningTaskId(null);
+    }
+  };
+
+  const loadRuns = async (
+    task: ScheduledTaskItem,
+    options: { selectRunId?: string; preserveSelection?: boolean } = {}
+  ) => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/scheduled-tasks/${task.id}/runs`
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '加载执行记录失败');
+      const nextRuns = Array.isArray(data.runs) ? data.runs : [];
+      setRuns(nextRuns);
+      setSelectedRunId((current) => {
+        if (options.selectRunId) return options.selectRunId;
+        if (
+          options.preserveSelection &&
+          current &&
+          nextRuns.some((run: ScheduledTaskRunItem) => run.id === current)
+        ) {
+          return current;
+        }
+        return nextRuns[0]?.id || null;
+      });
+      return nextRuns as ScheduledTaskRunItem[];
+    } catch (runsError) {
+      setRuns([]);
+      setSelectedRunId(null);
+      setError(
+        runsError instanceof Error ? runsError.message : '加载执行记录失败'
+      );
+      return [];
+    }
+  };
+
+  const openRuns = async (
+    task: ScheduledTaskItem,
+    selectRunId?: string
+  ) => {
+    setActiveTask(task);
+    setRunsOpen(true);
+    await loadRuns(task, { selectRunId });
+  };
+
+  const selectedRun =
+    runs.find((run) => run.id === selectedRunId) || runs[0] || null;
+  const hasRunningRuns = runs.some(
+    (run) => run.status === 'running' || run.status === 'queued'
+  );
+
+  useEffect(() => {
+    if (!runsOpen || !activeTask || !hasRunningRuns) return;
+    const timer = window.setInterval(() => {
+      void loadRuns(activeTask, { preserveSelection: true });
+      void loadTasks({ showLoading: false });
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [runsOpen, activeTask, hasRunningRuns]);
+
+  const toggleWeekday = (weekday: number) => {
+    setForm((current) => ({
+      ...current,
+      daysOfWeek: current.daysOfWeek.includes(weekday)
+        ? current.daysOfWeek.filter((day) => day !== weekday)
+        : [...current.daysOfWeek, weekday].sort((a, b) => a - b),
+    }));
+  };
+
+  const toggleSkill = (skillName: string) => {
+    setForm((current) => ({
+      ...current,
+      skillNames: current.skillNames.includes(skillName)
+        ? current.skillNames.filter((name) => name !== skillName)
+        : [...current.skillNames, skillName],
+    }));
+  };
 
   return (
-    <div className="border-sidebar-border relative flex h-full min-w-0 flex-1 flex-col border-l bg-white">
-      <div className="flex min-h-0 flex-1 items-center justify-center px-8">
-        <div className="flex w-full max-w-[860px] -translate-y-10 flex-col items-center text-center">
-          <div className="flex size-24 items-center justify-center rounded-full bg-[#ff5358] text-white shadow-[0_22px_54px_rgba(255,83,88,0.28)]">
-            <ClipboardList className="size-12" strokeWidth={1.8} />
-          </div>
-
-          <button className="mt-11 flex h-13 items-center gap-3 rounded-xl bg-slate-900 px-8 text-xl font-bold text-white shadow-sm transition hover:bg-slate-800">
-            <Plus className="size-7" />
-            创建任务
-          </button>
-
-          <h1 className="mt-18 text-2xl font-bold tracking-normal text-slate-950">
-            选择下方对话，一句话创建你的任务
+    <div className="border-sidebar-border relative flex h-full min-w-0 flex-1 flex-col border-l bg-slate-50">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-8 py-5">
+        <div>
+          <h1 className="text-2xl font-bold tracking-normal text-slate-950">
+            定时任务
           </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            创建通用自动化任务，按时间触发并保留执行记录。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={openCreateEditor}
+          className="flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-slate-800"
+        >
+          <Plus className="size-4" />
+          新建任务
+        </button>
+      </div>
 
-          <div className="mt-7 flex w-full flex-col items-center gap-4">
-            {suggestions.map((suggestion, index) => (
-              <button
-                key={suggestion}
-                className={cn(
-                  'flex h-[74px] items-center justify-between rounded-full bg-slate-100 px-7 text-left text-base text-slate-950 transition hover:bg-slate-200',
-                  index === 0 && 'w-[590px]',
-                  index === 1 && 'w-[680px]',
-                  index === 2 && 'w-[790px]'
-                )}
+      {error && (
+        <div className="mx-8 mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+        {loading ? (
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500">
+            <Loader2 className="size-4 animate-spin text-orange-500" />
+            加载定时任务
+          </div>
+        ) : tasks.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="w-full max-w-md text-center">
+              <div className="mx-auto flex size-20 items-center justify-center rounded-2xl bg-white text-orange-500 shadow-sm ring-1 ring-slate-200">
+                <ClipboardList className="size-10" strokeWidth={1.8} />
+              </div>
+              <h2 className="mt-6 text-xl font-bold text-slate-950">
+                还没有定时任务
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                创建一个示例任务即可看到任务行，并测试执行、执行记录和删除。
+              </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={createExampleTask}
+                  disabled={saving}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-orange-600 px-5 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:opacity-50"
+                >
+                  {saving ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Play className="size-4" />
+                  )}
+                  创建示例任务
+                </button>
+                <button
+                  type="button"
+                  onClick={openCreateEditor}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <Plus className="size-4" />
+                  新建任务
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {tasks.map((task) => (
+              <article
+                key={task.id}
+                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
               >
-                <span className="truncate">{suggestion}</span>
-                <ArrowRight className="ml-5 size-5 shrink-0 text-slate-400" />
-              </button>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="truncate text-lg font-bold text-slate-950">
+                        {task.name}
+                      </h2>
+                      <span
+                        className={cn(
+                          'rounded-full px-2.5 py-1 text-xs font-semibold',
+                          task.status === 'enabled'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-slate-100 text-slate-500'
+                        )}
+                      >
+                        {task.status === 'enabled' ? '已启用' : '已暂停'}
+                      </span>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">
+                      {task.prompt}
+                    </p>
+                    <div className="mt-4 flex flex-wrap items-center gap-3 text-xs font-medium text-slate-500">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CalendarCheck className="size-3.5" />
+                        {formatScheduleLabel(task.schedule)}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Clock className="size-3.5" />
+                        下次：{formatScheduledDate(task.nextRunAt)}
+                      </span>
+                      {task.skillNames.length > 0 && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Puzzle className="size-3.5" />
+                          {task.skillNames.join('、')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => runTaskNow(task)}
+                      disabled={runningTaskId === task.id}
+                      className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                      title="立即执行"
+                    >
+                      {runningTaskId === task.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Play className="size-4" />
+                      )}
+                      {runningTaskId === task.id ? '提交中' : '立即执行'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void toggleTaskStatus(task)}
+                      disabled={togglingTaskId === task.id}
+                      className={cn(
+                        'flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition disabled:opacity-50',
+                        task.status === 'enabled'
+                          ? 'border-amber-100 text-amber-700 hover:bg-amber-50'
+                          : 'border-emerald-100 text-emerald-700 hover:bg-emerald-50'
+                      )}
+                      title={task.status === 'enabled' ? '停止' : '开启'}
+                    >
+                      {togglingTaskId === task.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : task.status === 'enabled' ? (
+                        <PauseCircle className="size-4" />
+                      ) : (
+                        <CircleCheck className="size-4" />
+                      )}
+                      {task.status === 'enabled' ? '停止' : '开启'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openRuns(task)}
+                      className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                    >
+                      执行记录
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openEditEditor(task)}
+                      className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                      title="编辑"
+                    >
+                      <Pencil className="size-4" />
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTaskPendingDelete(task)}
+                      disabled={deletingTaskId === task.id}
+                      className="flex h-9 items-center gap-1.5 rounded-lg border border-red-100 px-3 text-xs font-semibold text-red-500 transition hover:bg-red-50"
+                      title="删除"
+                    >
+                      {deletingTaskId === task.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-4" />
+                      )}
+                      {deletingTaskId === task.id ? '删除中' : '删除'}
+                    </button>
+                  </div>
+                </div>
+              </article>
             ))}
           </div>
-        </div>
+        )}
       </div>
+
+      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{activeTask ? '编辑任务' : '新建任务'}</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <label className="block">
+              <span className="text-sm font-semibold text-slate-700">
+                任务名称
+              </span>
+              <input
+                value={form.name}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                placeholder="例如：每日行业资讯摘要"
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-sm font-semibold text-slate-700">
+                任务内容
+              </span>
+              <textarea
+                value={form.prompt}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    prompt: event.target.value,
+                  }))
+                }
+                className="mt-2 min-h-28 w-full resize-none rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                placeholder="描述要定时执行的工作"
+              />
+            </label>
+
+            <div>
+              <span className="text-sm font-semibold text-slate-700">
+                执行计划
+              </span>
+              <div className="mt-2 grid grid-cols-3 gap-2 rounded-xl bg-slate-100 p-1">
+                {(['daily', 'weekly', 'interval'] as const).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() =>
+                      setForm((current) => ({ ...current, scheduleType: type }))
+                    }
+                    className={cn(
+                      'h-9 rounded-lg text-sm font-semibold transition',
+                      form.scheduleType === type
+                        ? 'bg-white text-slate-950 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-900'
+                    )}
+                  >
+                    {type === 'daily'
+                      ? '每天'
+                      : type === 'weekly'
+                        ? '每周'
+                        : '间隔'}
+                  </button>
+                ))}
+              </div>
+
+              {form.scheduleType !== 'interval' ? (
+                <div className="mt-3 space-y-3">
+                  <input
+                    type="time"
+                    value={form.time}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        time: event.target.value,
+                      }))
+                    }
+                    className="h-11 w-40 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                  />
+                  {form.scheduleType === 'weekly' && (
+                    <div className="flex flex-wrap gap-2">
+                      {SCHEDULE_WEEKDAYS.map((weekday) => (
+                        <button
+                          key={weekday.value}
+                          type="button"
+                          onClick={() => toggleWeekday(weekday.value)}
+                          className={cn(
+                            'size-9 rounded-lg border text-sm font-semibold transition',
+                            form.daysOfWeek.includes(weekday.value)
+                              ? 'border-orange-200 bg-orange-50 text-orange-600'
+                              : 'border-slate-200 bg-white text-slate-500'
+                          )}
+                        >
+                          {weekday.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-sm text-slate-500">每</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.intervalMinutes}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        intervalMinutes: Number(event.target.value),
+                      }))
+                    }
+                    className="h-11 w-28 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                  />
+                  <span className="text-sm text-slate-500">分钟执行一次</span>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <span className="text-sm font-semibold text-slate-700">
+                引用已安装 Skills
+              </span>
+              <div className="mt-2 flex max-h-32 flex-wrap gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3">
+                {skills.length === 0 ? (
+                  <span className="text-sm text-slate-500">
+                    暂未发现可引用的已安装技能。
+                  </span>
+                ) : (
+                  skills.map((skill) => (
+                    <button
+                      key={skill.id}
+                      type="button"
+                      onClick={() => toggleSkill(skill.name)}
+                      className={cn(
+                        'rounded-full border px-3 py-1.5 text-xs font-semibold transition',
+                        form.skillNames.includes(skill.name)
+                          ? 'border-orange-200 bg-orange-50 text-orange-600'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                      )}
+                    >
+                      {skill.name}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setEditorOpen(false)}
+              className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={saveTask}
+              disabled={saving || !form.name.trim() || !form.prompt.trim()}
+              className="flex h-10 items-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:opacity-50"
+            >
+              {saving && <Loader2 className="size-4 animate-spin" />}
+              保存
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={taskPendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deletingTaskId) {
+            setTaskPendingDelete(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>删除定时任务</DialogTitle>
+            <DialogDescription>
+              {taskPendingDelete
+                ? `删除「${taskPendingDelete.name}」后，会同时移除执行记录，此操作无法撤销。`
+                : '确认删除这个定时任务？'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setTaskPendingDelete(null)}
+              disabled={deletingTaskId !== null}
+              className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (taskPendingDelete) {
+                  void deleteTask(taskPendingDelete);
+                }
+              }}
+              disabled={deletingTaskId !== null}
+              className="flex h-10 items-center gap-2 rounded-xl bg-red-600 px-4 text-sm font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
+            >
+              {deletingTaskId && <Loader2 className="size-4 animate-spin" />}
+              删除
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {runsOpen && (
+        <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/30">
+          <aside className="flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-bold text-slate-950">
+                  执行记录
+                </h2>
+                <p className="mt-1 truncate text-sm text-slate-500">
+                  {activeTask?.name}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRunsOpen(false)}
+                className="flex size-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              {runs.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  暂无执行记录
+                </div>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+                  <div className="space-y-3">
+                    {runs.map((run) => (
+                      <button
+                        key={run.id}
+                        type="button"
+                        onClick={() => setSelectedRunId(run.id)}
+                        className={cn(
+                          'w-full rounded-xl border p-4 text-left transition',
+                          selectedRun?.id === run.id
+                            ? 'border-orange-200 bg-orange-50/70'
+                            : 'border-slate-200 bg-white hover:bg-slate-50'
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={cn(
+                              'rounded-full px-2.5 py-1 text-xs font-semibold',
+                              run.status === 'success'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : run.status === 'failed'
+                                  ? 'bg-red-50 text-red-600'
+                                  : 'bg-slate-100 text-slate-500'
+                            )}
+                          >
+                            {formatRunStatusLabel(run.status)}
+                          </span>
+                          {(run.status === 'running' ||
+                            run.status === 'queued') && (
+                            <Loader2 className="size-3.5 animate-spin text-orange-500" />
+                          )}
+                          <span className="text-xs text-slate-500">
+                            {formatScheduledDate(run.startedAt)}
+                          </span>
+                        </div>
+                        <p className="mt-3 line-clamp-4 text-sm leading-6 text-slate-600">
+                          {run.error || run.summary || '任务已开始执行。'}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    {selectedRun ? (
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-sm font-bold text-slate-950">
+                            执行结果
+                          </h3>
+                          <span className="text-xs text-slate-500">
+                            {formatRunStatusLabel(selectedRun.status)}
+                          </span>
+                        </div>
+                        <div
+                          className={cn(
+                            'mt-3 rounded-lg border px-3 py-2 text-sm leading-6',
+                            selectedRun.status === 'failed'
+                              ? 'border-red-100 bg-red-50 text-red-700'
+                              : 'border-slate-200 bg-white text-slate-700'
+                          )}
+                        >
+                          {selectedRun.error ||
+                            selectedRun.summary ||
+                            '任务已开始执行，完成后这里会自动更新结果。'}
+                        </div>
+
+                        <div className="mt-5 flex items-center justify-between">
+                          <h3 className="text-sm font-bold text-slate-950">
+                            执行内容
+                          </h3>
+                          <span className="text-xs text-slate-500">
+                            {selectedRun.messages?.length || 0} 条
+                          </span>
+                        </div>
+
+                        {selectedRun.messages?.length ? (
+                          <div className="mt-3 space-y-2">
+                            {selectedRun.messages.map((message, index) => (
+                              <div
+                                key={`${selectedRun.id}-${index}`}
+                                className="rounded-lg border border-slate-200 bg-white p-3"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-bold uppercase text-slate-500">
+                                    {message.type}
+                                  </span>
+                                  {message.subtype && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                      {message.subtype}
+                                    </span>
+                                  )}
+                                </div>
+                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+                                  {formatScheduledRunMessage(message)}
+                                </pre>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-white px-3 py-6 text-center text-sm text-slate-500">
+                            暂无详细消息，任务运行中会自动刷新。
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex h-full min-h-60 items-center justify-center text-sm text-slate-500">
+                        选择一条执行记录查看结果和内容
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatScheduleLabel(schedule: ScheduledTaskSchedule): string {
+  if (schedule.type === 'daily') return `每天 ${schedule.time}`;
+  if (schedule.type === 'interval')
+    return `每 ${schedule.intervalMinutes} 分钟`;
+  const labels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  return `${schedule.daysOfWeek.map((day) => labels[day]).join('、')} ${schedule.time}`;
+}
+
+function formatScheduledDate(value: string | null): string {
+  if (!value) return '未安排';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未安排';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatRunStatusLabel(status: ScheduledTaskRunItem['status']): string {
+  if (status === 'success') return '成功';
+  if (status === 'failed') return '失败';
+  if (status === 'queued') return '排队中';
+  return '运行中';
+}
+
+function formatScheduledRunMessage(message: ScheduledTaskRunMessage): string {
+  if (message.type === 'result') {
+    const details = Object.fromEntries(
+      Object.entries(message).filter(
+        ([key, value]) => key !== 'type' && value !== undefined
+      )
+    );
+    return Object.keys(details).length === 0
+      ? '无内容'
+      : JSON.stringify(details, null, 2);
+  }
+
+  const primary =
+    message.message || message.content || message.output || message.subtype;
+  if (primary) return primary;
+
+  const details = Object.fromEntries(
+    Object.entries(message).filter(
+      ([key, value]) => key !== 'type' && value !== undefined
+    )
+  );
+  if (Object.keys(details).length === 0) return '无内容';
+  return JSON.stringify(details, null, 2);
 }
 
 function TaskAssistantPanel({
@@ -1677,6 +2815,16 @@ function TaskAssistantPanel({
   const activateAssistant = (assistant: SidebarAssistant) => {
     setActiveAssistantId(assistant.id);
     dispatchAssistantSelection(assistant);
+  };
+
+  const startCollaborationSession = () => {
+    setActiveAssistantId('primary');
+    dispatchAssistantSelection({
+      id: 'primary',
+      name: t.nav.primaryAssistant,
+      initial: 'W',
+    });
+    dispatchCollaborationSessionStart();
   };
 
   const addAssistant = (assistant: SidebarAssistant) => {
@@ -1873,6 +3021,14 @@ function TaskAssistantPanel({
               <span className="text-lg leading-none">+</span>
               {t.nav.createAssistant}
             </button>
+            <button
+              type="button"
+              onClick={startCollaborationSession}
+              className="border-primary/20 bg-primary/10 text-primary hover:bg-primary/15 flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors"
+            >
+              <UsersRound className="size-4" />
+              协作会话
+            </button>
           </div>
         </div>
 
@@ -1921,6 +3077,9 @@ function TaskAssistantPanel({
             <DialogTitle className="text-2xl">
               {t.nav.createAssistant}
             </DialogTitle>
+            <DialogDescription>
+              创建自定义助手，并为它选择可用技能与 AI 能力范围。
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 py-2">
             <div>
@@ -2074,8 +3233,20 @@ function TaskAssistantPanel({
                                 : 'border-border bg-background hover:border-primary/30 hover:bg-primary/5'
                             )}
                           >
-                            <span className="block text-base font-extrabold tracking-normal">
-                              {skill.label}
+                            <span className="flex items-start justify-between gap-3">
+                              <span className="block min-w-0 text-base font-extrabold tracking-normal">
+                                {skill.label}
+                              </span>
+                              <span
+                                className={cn(
+                                  'flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors',
+                                  selected
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border bg-background text-transparent'
+                                )}
+                              >
+                                <CircleCheck className="size-4" />
+                              </span>
                             </span>
                             <span className="text-muted-foreground mt-1.5 block text-xs leading-5 font-semibold">
                               {skill.description}
@@ -2159,8 +3330,20 @@ function TaskAssistantPanel({
                                 : 'border-border bg-background hover:border-primary/30 hover:bg-primary/5'
                             )}
                           >
-                            <span className="block text-base font-extrabold tracking-normal">
-                              {mcp.label}
+                            <span className="flex items-start justify-between gap-3">
+                              <span className="block min-w-0 text-base font-extrabold tracking-normal">
+                                {mcp.label}
+                              </span>
+                              <span
+                                className={cn(
+                                  'flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors',
+                                  selected
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border bg-background text-transparent'
+                                )}
+                              >
+                                <CircleCheck className="size-4" />
+                              </span>
                             </span>
                             <span className="text-muted-foreground mt-1.5 block text-xs leading-5 font-semibold">
                               {mcp.description}

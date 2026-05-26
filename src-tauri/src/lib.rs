@@ -179,6 +179,40 @@ pub fn run() {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "create_scheduled_task_tables",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'enabled',
+                    schedule TEXT NOT NULL,
+                    skill_names TEXT NOT NULL DEFAULT '[]',
+                    next_run_at TEXT,
+                    last_run_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    finished_at TEXT,
+                    summary TEXT,
+                    error TEXT,
+                    messages TEXT NOT NULL DEFAULT '[]',
+                    FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run_at ON scheduled_tasks(next_run_at);
+                CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task_id ON scheduled_task_runs(task_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ];
 
     #[cfg(not(debug_assertions))]
@@ -191,7 +225,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:workany.db", migrations)
+                .add_migrations("sqlite:uniins-claw.db", migrations)
                 .build(),
         );
 
@@ -213,7 +247,7 @@ pub fn run() {
                 // Kill any existing process on the API port
                 kill_existing_api_process(API_PORT);
 
-                let sidecar_command = app.shell().sidecar("workany-api")
+                let sidecar_command = app.shell().sidecar("uniins-claw-api")
                     .unwrap()
                     .env("PORT", API_PORT.to_string())
                     .env("NODE_ENV", "production");

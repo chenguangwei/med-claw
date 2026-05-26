@@ -19,6 +19,7 @@ import {
   ArrowUpRight,
   BadgeDollarSign,
   Bot,
+  CalendarCheck2,
   CalendarDays,
   CheckCircle2,
   Cog,
@@ -30,10 +31,12 @@ import {
   Mail,
   MapPin,
   Phone,
+  Plus,
   ShieldCheck,
   ThumbsDown,
   ThumbsUp,
   UserRound,
+  UsersRound,
   WalletCards,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -45,7 +48,11 @@ import {
   type SalesDemoTurn,
 } from '@/components/home/salesAssistantDemo';
 import { LeftSidebar, SidebarProvider } from '@/components/layout';
-import { ChatInput, type ChatMode } from '@/components/shared/ChatInput';
+import {
+  ChatInput,
+  type ChatMode,
+  type MentionOption,
+} from '@/components/shared/ChatInput';
 import {
   Dialog,
   DialogContent,
@@ -80,6 +87,14 @@ interface DemoMessage {
   active?: boolean;
 }
 
+interface CollaborationAssistant {
+  id: 'sales' | 'meeting' | 'office' | 'document-review';
+  name: string;
+  description: string;
+  Icon: React.ComponentType<{ className?: string }>;
+  tone: 'orange' | 'sky' | 'emerald' | 'violet';
+}
+
 type MockDetail =
   | {
       type: 'customer';
@@ -89,6 +104,48 @@ type MockDetail =
       type: 'policy';
       id: string;
     };
+
+const collaborationAssistants: CollaborationAssistant[] = [
+  {
+    id: 'sales',
+    name: '销售助手',
+    description: '客户跟进、产品话术、异议处理',
+    Icon: BadgeDollarSign,
+    tone: 'orange',
+  },
+  {
+    id: 'meeting',
+    name: '会议助手',
+    description: '纪要、待办、决议和会前材料',
+    Icon: CalendarCheck2,
+    tone: 'sky',
+  },
+  {
+    id: 'office',
+    name: '办公助手',
+    description: '资料整理、邮件、跨部门跟进',
+    Icon: FolderOpen,
+    tone: 'emerald',
+  },
+  {
+    id: 'document-review',
+    name: '文档审核',
+    description: '方案、合同、制度的风险审核',
+    Icon: ShieldCheck,
+    tone: 'violet',
+  },
+];
+
+const defaultCollaborationAssistantIds: CollaborationAssistant['id'][] = [
+  'sales',
+  'meeting',
+];
+
+const collaborationQuickPrompts = [
+  '@销售助手 梳理客户李明对百万医疗的主要异议，给出下一次电话沟通的开场、风险解释、产品对比和成交推进话术。',
+  '@会议助手 根据一次客户方案评审会整理会议纪要，输出议程、决议、责任人、截止时间和会后跟进清单。',
+  '大家一起准备明天客户跟进会：销售助手负责沟通方案，会议助手负责会议流程和纪要模板，办公助手负责会前资料清单。',
+];
 
 const sleep = (duration: number) =>
   new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -219,6 +276,67 @@ function normalizeMockPrompt(text: string) {
   return text.replace(/^使用以下能力：销售助手。\s*/u, '').trim();
 }
 
+function getCollaborationAssistant(assistantId: CollaborationAssistant['id']) {
+  return collaborationAssistants.find(
+    (assistant) => assistant.id === assistantId
+  );
+}
+
+function getCollaborationTargets(
+  prompt: string,
+  participantIds: CollaborationAssistant['id'][]
+) {
+  const mentioned = participantIds.filter((assistantId) => {
+    const assistant = getCollaborationAssistant(assistantId);
+    return assistant ? prompt.includes(`@${assistant.name}`) : false;
+  });
+
+  if (mentioned.length > 0) return mentioned;
+  if (/大家|一起|协作|所有助手/u.test(prompt)) return participantIds;
+
+  return participantIds.slice(0, 1);
+}
+
+function getAssistantToneClasses(tone: CollaborationAssistant['tone']) {
+  return {
+    orange: 'bg-orange-50 text-orange-700 border-orange-100',
+    sky: 'bg-sky-50 text-sky-700 border-sky-100',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    violet: 'bg-violet-50 text-violet-700 border-violet-100',
+  }[tone];
+}
+
+function buildCollaborationAgentPrompt(
+  prompt: string,
+  participants: CollaborationAssistant[],
+  targets: CollaborationAssistant[]
+) {
+  const participantLines = participants.map(
+    (assistant) => `- @${assistant.name}：${assistant.description}`
+  );
+  const targetNames = targets
+    .map((assistant) => `@${assistant.name}`)
+    .join('、');
+
+  return [
+    '这是一个工作助手协作会话。请作为真实 Agent 执行，不要使用 mock 数据，也不要假装已有外部系统结果；需要工具、文件、检索、代码或系统能力时，按正常 Agent 能力完成。',
+    '',
+    '参与助手：',
+    ...participantLines,
+    '',
+    `本轮明确响应对象：${targetNames || '按任务需要在参与助手之间分工'}`,
+    '',
+    '回答要求：',
+    '- 如果用户用 @ 指定了某个助手，优先以该助手职责处理。',
+    '- 如果用户要求大家一起协作，请按助手职责分段输出，每段标题使用对应 @助手名。',
+    '- 需要执行任务时直接执行；需要用户补充信息时只问必要问题。',
+    '- 输出要可直接用于工作推进，包含结论、步骤、待办、负责人或风险提示。',
+    '',
+    '用户输入：',
+    prompt,
+  ].join('\n');
+}
+
 function getMockDetailFromHref(href: string): MockDetail | null {
   try {
     const url = new URL(href);
@@ -282,12 +400,27 @@ function HomeContent() {
   const [demoRunning, setDemoRunning] = useState(false);
   const [demoCompleted, setDemoCompleted] = useState(false);
   const [mockDetail, setMockDetail] = useState<MockDetail | null>(null);
+  const [collaborationActive, setCollaborationActive] = useState(false);
+  const [collaborationAssistantIds, setCollaborationAssistantIds] = useState<
+    CollaborationAssistant['id'][]
+  >(defaultCollaborationAssistantIds);
+  const [collaborationRunning, setCollaborationRunning] = useState(false);
   const demoMessagesEndRef = useRef<HTMLDivElement>(null);
   const demoRunRef = useRef(0);
   const navigate = useNavigate();
 
   const hasDemoConversation = demoMessages.length > 0 || demoRunning;
   const nextDemoStep = salesDemoSteps[demoStepIndex];
+  const activeCollaborationAssistants = collaborationAssistantIds
+    .map(getCollaborationAssistant)
+    .filter(Boolean) as CollaborationAssistant[];
+  const collaborationMentionOptions: MentionOption[] =
+    activeCollaborationAssistants.map((assistant) => ({
+      id: assistant.id,
+      label: assistant.name,
+      description: assistant.description,
+      icon: assistant.Icon,
+    }));
 
   useEffect(() => {
     demoMessagesEndRef.current?.scrollIntoView({
@@ -316,8 +449,18 @@ function HomeContent() {
     setDemoCompleted(false);
   }, []);
 
+  const startCollaborationSession = useCallback(() => {
+    setCollaborationActive(true);
+    setSalesAssistantActive(false);
+    setSelectedCapabilityId(null);
+    setActiveCategory(null);
+    resetSalesDemo();
+    setPendingPrompt('');
+  }, [resetSalesDemo]);
+
   const handleCapabilitySelect = useCallback(
     (capabilityId: string | null) => {
+      setCollaborationActive(false);
       setSelectedCapabilityId(capabilityId);
       const isSales = capabilityId === 'sales';
       setSalesAssistantActive(isSales);
@@ -338,17 +481,25 @@ function HomeContent() {
     };
 
     window.addEventListener(
-      'workany:assistant-selected',
+      'uniins-claw:assistant-selected',
       handleAssistantSelection
+    );
+    window.addEventListener(
+      'uniins-claw:collaboration-session-start',
+      startCollaborationSession
     );
 
     return () => {
       window.removeEventListener(
-        'workany:assistant-selected',
+        'uniins-claw:assistant-selected',
         handleAssistantSelection
       );
+      window.removeEventListener(
+        'uniins-claw:collaboration-session-start',
+        startCollaborationSession
+      );
     };
-  }, [handleCapabilitySelect]);
+  }, [handleCapabilitySelect, startCollaborationSession]);
 
   const handleInputActivate = useCallback(() => {
     if (
@@ -414,6 +565,7 @@ function HomeContent() {
 
   const handleCategoryClick = (key: CategoryKey) => {
     setActiveCategory((prev) => (prev === key ? null : key));
+    setCollaborationActive(false);
     setSalesAssistantActive(false);
     setSelectedCapabilityId(null);
     resetSalesDemo();
@@ -433,6 +585,24 @@ function HomeContent() {
     setPendingPrompt('');
   }, []);
 
+  const handleCollaborationQuickPrompt = (prompt: string) => {
+    setPendingPrompt(prompt);
+  };
+
+  const handleToggleCollaborationAssistant = (
+    assistantId: CollaborationAssistant['id']
+  ) => {
+    setCollaborationAssistantIds((current) => {
+      if (current.includes(assistantId)) {
+        return current.length > 1
+          ? current.filter((id) => id !== assistantId)
+          : current;
+      }
+
+      return [...current, assistantId];
+    });
+  };
+
   const handleOpenMockDetail = useCallback((href: string) => {
     const detail = getMockDetailFromHref(href);
     if (!detail) return false;
@@ -440,6 +610,58 @@ function HomeContent() {
     setMockDetail(detail);
     return true;
   }, []);
+
+  const handleCollaborationSubmit = useCallback(
+    async (text: string, attachments?: MessageAttachment[]) => {
+      const prompt = text.trim();
+      if (!prompt || collaborationRunning) return;
+
+      setCollaborationRunning(true);
+      try {
+        const targets = getCollaborationTargets(
+          prompt,
+          collaborationAssistantIds
+        )
+          .map(getCollaborationAssistant)
+          .filter(Boolean) as CollaborationAssistant[];
+        const agentPrompt = buildCollaborationAgentPrompt(
+          prompt,
+          activeCollaborationAssistants,
+          targets
+        );
+        const sessionId = generateSessionId(prompt);
+
+        try {
+          await createSession({ id: sessionId, prompt });
+          console.log('[Home] Created collaboration session:', sessionId);
+        } catch (error) {
+          console.error(
+            '[Home] Failed to create collaboration session:',
+            error
+          );
+        }
+
+        navigate(`/task/${Date.now().toString()}`, {
+          state: {
+            prompt: agentPrompt,
+            sessionId,
+            taskIndex: 1,
+            attachments,
+            mode: 'task' satisfies ChatMode,
+          },
+        });
+      } finally {
+        setPendingPrompt('');
+        setCollaborationRunning(false);
+      }
+    },
+    [
+      activeCollaborationAssistants,
+      collaborationAssistantIds,
+      collaborationRunning,
+      navigate,
+    ]
+  );
 
   // Subscribe to background tasks
   useEffect(() => {
@@ -490,6 +712,11 @@ function HomeContent() {
     if (!text.trim() && (!attachments || attachments.length === 0)) return;
 
     const prompt = text.trim();
+
+    if (collaborationActive) {
+      await handleCollaborationSubmit(prompt, attachments);
+      return;
+    }
 
     if (salesAssistantActive) {
       if (!nextDemoStep || demoRunning) return;
@@ -552,7 +779,12 @@ function HomeContent() {
 
   const categories = t.home.examplePrompts.categories;
   const activeCategoryData = activeCategory ? categories[activeCategory] : null;
+  const hasActiveConversation = hasDemoConversation;
   const inputPlaceholder = useMemo(() => {
+    if (collaborationActive) {
+      return '输入 @销售助手、@会议助手，或直接让大家协作处理';
+    }
+
     if (salesAssistantActive && demoCompleted) {
       return '本轮咨询已完成，可继续输入新的业务问题';
     }
@@ -564,6 +796,7 @@ function HomeContent() {
     return activeCategoryData?.placeholder ?? t.home.inputPlaceholder;
   }, [
     activeCategoryData?.placeholder,
+    collaborationActive,
     demoCompleted,
     salesAssistantActive,
     t.home.inputPlaceholder,
@@ -586,19 +819,19 @@ function HomeContent() {
         <div
           className={cn(
             'flex min-h-0 flex-1 flex-col overflow-hidden px-4',
-            hasDemoConversation ? 'py-5' : 'items-center justify-center'
+            hasActiveConversation ? 'py-5' : 'items-center justify-center'
           )}
         >
           <div
             className={cn(
               'flex w-full flex-col items-center gap-6',
-              hasDemoConversation
+              hasActiveConversation
                 ? 'mx-auto min-h-0 max-w-5xl flex-1'
                 : 'max-w-2xl'
             )}
           >
             {/* Title */}
-            {!hasDemoConversation && (
+            {!hasActiveConversation && (
               <h1 className="text-foreground text-center font-serif text-4xl font-normal tracking-tight md:text-5xl">
                 {t.home.welcomeTitle}
               </h1>
@@ -606,6 +839,15 @@ function HomeContent() {
 
             {salesAssistantActive && !hasDemoConversation && (
               <SalesAssistantFaqPanel completed={demoCompleted} />
+            )}
+
+            {collaborationActive && (
+              <CollaborationStartPanel
+                activeAssistants={activeCollaborationAssistants}
+                assistantIds={collaborationAssistantIds}
+                onToggleAssistant={handleToggleCollaborationAssistant}
+                onPromptClick={handleCollaborationQuickPrompt}
+              />
             )}
 
             {hasDemoConversation && (
@@ -627,7 +869,7 @@ function HomeContent() {
             <ChatInput
               variant="home"
               placeholder={inputPlaceholder}
-              isRunning={demoRunning}
+              isRunning={demoRunning || collaborationRunning}
               onSubmit={handleSubmit}
               className="w-full"
               autoFocus={!salesAssistantActive}
@@ -637,6 +879,10 @@ function HomeContent() {
               selectedCapabilityId={selectedCapabilityId}
               onInputActivate={handleInputActivate}
               preserveCapabilitiesOnSubmit={salesAssistantActive}
+              showCapabilities={!collaborationActive}
+              mentionOptions={
+                collaborationActive ? collaborationMentionOptions : undefined
+              }
               categoryTag={
                 activeCategory && activeCategoryData
                   ? {
@@ -649,7 +895,8 @@ function HomeContent() {
             />
 
             {/* Category Buttons / Prompt List */}
-            {salesAssistantActive ? null : activeCategory &&
+            {salesAssistantActive ||
+            collaborationActive ? null : activeCategory &&
               activeCategoryData ? (
               /* Expanded: show prompts for selected category */
               <div className="w-full">
@@ -697,6 +944,116 @@ function HomeContent() {
         }}
       />
     </div>
+  );
+}
+
+function CollaborationStartPanel({
+  activeAssistants,
+  assistantIds,
+  onToggleAssistant,
+  onPromptClick,
+}: {
+  activeAssistants: CollaborationAssistant[];
+  assistantIds: CollaborationAssistant['id'][];
+  onToggleAssistant: (assistantId: CollaborationAssistant['id']) => void;
+  onPromptClick: (prompt: string) => void;
+}) {
+  return (
+    <div className="w-full space-y-4">
+      <div className="border-border/70 bg-card/80 rounded-xl border p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-xl">
+              <UsersRound className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-foreground text-lg font-semibold">
+                协作会话
+              </h2>
+              <p className="text-muted-foreground mt-1 text-sm">
+                已拉入 {activeAssistants.length} 个工作助手
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {activeAssistants.map((assistant) => (
+              <AssistantPill key={assistant.id} assistant={assistant} />
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 md:grid-cols-2">
+          {collaborationAssistants.map((assistant) => {
+            const active = assistantIds.includes(assistant.id);
+            const Icon = assistant.Icon;
+
+            return (
+              <button
+                key={assistant.id}
+                type="button"
+                onClick={() => onToggleAssistant(assistant.id)}
+                className={cn(
+                  'border-border bg-background hover:border-primary/35 hover:bg-primary/5 flex min-h-20 items-start gap-3 rounded-xl border p-3 text-left transition-colors',
+                  active && 'border-primary/30 bg-primary/5'
+                )}
+              >
+                <span
+                  className={cn(
+                    'flex size-9 shrink-0 items-center justify-center rounded-lg border',
+                    getAssistantToneClasses(assistant.tone)
+                  )}
+                >
+                  <Icon className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="text-foreground block text-sm font-semibold">
+                    {assistant.name}
+                  </span>
+                  <span className="text-muted-foreground mt-1 block text-xs leading-5">
+                    {assistant.description}
+                  </span>
+                </span>
+                {active ? (
+                  <CheckCircle2 className="text-primary mt-1 size-4 shrink-0" />
+                ) : (
+                  <Plus className="text-muted-foreground mt-1 size-4 shrink-0" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="border-border divide-border divide-y rounded-xl border">
+        {collaborationQuickPrompts.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            onClick={() => onPromptClick(prompt)}
+            className="text-foreground hover:bg-accent group flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left text-sm transition-colors first:rounded-t-xl last:rounded-b-xl"
+          >
+            <span className="min-w-0 truncate">{prompt}</span>
+            <ArrowUpRight className="text-muted-foreground group-hover:text-foreground size-4 shrink-0 transition-colors" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AssistantPill({ assistant }: { assistant: CollaborationAssistant }) {
+  const Icon = assistant.Icon;
+
+  return (
+    <span
+      className={cn(
+        'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold',
+        getAssistantToneClasses(assistant.tone)
+      )}
+    >
+      <Icon className="size-3.5" />
+      {assistant.name}
+    </span>
   );
 }
 

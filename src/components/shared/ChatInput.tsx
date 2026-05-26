@@ -14,6 +14,7 @@ import { useLanguage } from '@/shared/providers/language-provider';
 import {
   ArrowUp,
   BadgeDollarSign,
+  Bot,
   BriefcaseBusiness,
   CalendarCheck2,
   Cpu,
@@ -60,7 +61,7 @@ interface SkillOption {
   id: string;
   name: string;
   description?: string;
-  source: 'claude' | 'workany';
+  source: 'claude' | 'uniins-claw';
   path: string;
   enabled: boolean;
 }
@@ -70,6 +71,13 @@ interface CapabilityOption {
   label: string;
   instruction: string;
   icon: React.ComponentType<{ className?: string }>;
+}
+
+export interface MentionOption {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: React.ComponentType<{ className?: string }>;
 }
 
 const capabilityOptions: CapabilityOption[] = [
@@ -136,6 +144,10 @@ export interface ChatInputProps {
   onInputActivate?: () => void;
   /** Keep selected capability chips after submit */
   preserveCapabilitiesOnSubmit?: boolean;
+  /** Whether to show built-in capability chips on the home input */
+  showCapabilities?: boolean;
+  /** Assistant mention options shown when typing @ */
+  mentionOptions?: MentionOption[];
 }
 
 // Generate unique ID for attachments
@@ -250,6 +262,8 @@ export function ChatInput({
   selectedCapabilityId,
   onInputActivate,
   preserveCapabilitiesOnSubmit = false,
+  showCapabilities = true,
+  mentionOptions = [],
 }: ChatInputProps) {
   const { t } = useLanguage();
   const [value, setValue] = useState('');
@@ -263,6 +277,7 @@ export function ChatInput({
     []
   );
   const [highlightedSkillIndex, setHighlightedSkillIndex] = useState(0);
+  const [highlightedMentionIndex, setHighlightedMentionIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -275,6 +290,12 @@ export function ChatInput({
     : null;
   const skillQuery = slashMatch?.[1]?.toLowerCase() ?? '';
   const shouldShowSkillMenu = !!slashMatch && !isRunning && !disabled;
+  const mentionMatch =
+    mentionOptions.length > 0 && !selectedSkill
+      ? value.match(/(^|\s)@([\u4e00-\u9fa5A-Za-z0-9_-]*)$/u)
+      : null;
+  const mentionQuery = mentionMatch?.[2]?.toLowerCase() ?? '';
+  const shouldShowMentionMenu = !!mentionMatch && !isRunning && !disabled;
   const filteredSkills = skills
     .filter((skill) => skill.enabled)
     .filter((skill) => {
@@ -285,6 +306,15 @@ export function ChatInput({
       );
     })
     .slice(0, 8);
+  const filteredMentions = mentionOptions
+    .filter((option) => {
+      if (!mentionQuery) return true;
+      return (
+        option.label.toLowerCase().includes(mentionQuery) ||
+        option.description?.toLowerCase().includes(mentionQuery)
+      );
+    })
+    .slice(0, 6);
   const selectedCapabilities = capabilityOptions.filter((capability) =>
     selectedCapabilityIds.includes(capability.id)
   );
@@ -349,7 +379,7 @@ export function ChatInput({
       const loadSkillDirectory = async (
         rootPath: string,
         idPrefix: string,
-        source: 'claude' | 'workany',
+        source: 'claude' | 'uniins-claw',
         enabled: boolean
       ) => {
         if (!enabled) return;
@@ -411,7 +441,7 @@ export function ChatInput({
         await loadSkillDirectory(
           dir.path,
           dir.name,
-          isUserDir ? 'claude' : 'workany',
+          isUserDir ? 'claude' : 'uniins-claw',
           isUserDir
             ? settings.skillsUserDirEnabled !== false
             : settings.skillsAppDirEnabled !== false
@@ -426,7 +456,7 @@ export function ChatInput({
           await loadSkillDirectory(
             settings.skillsPath,
             'custom',
-            'workany',
+            'uniins-claw',
             true
           );
         }
@@ -449,6 +479,12 @@ export function ChatInput({
       setHighlightedSkillIndex(0);
     }
   }, [loadSkills, shouldShowSkillMenu, skillQuery]);
+
+  useEffect(() => {
+    if (shouldShowMentionMenu) {
+      setHighlightedMentionIndex(0);
+    }
+  }, [mentionQuery, shouldShowMentionMenu]);
 
   // Add files to attachments
   // forceImage: when true, treat all files as images (e.g., from clipboard paste)
@@ -814,7 +850,53 @@ export function ChatInput({
     });
   }, []);
 
+  const selectMention = useCallback(
+    (mention: MentionOption) => {
+      const match = value.match(/(^|\s)@([\u4e00-\u9fa5A-Za-z0-9_-]*)$/u);
+      const prefix = match ? value.slice(0, match.index) + match[1] : value;
+      setValue(`${prefix}@${mention.label} `);
+      setHighlightedMentionIndex(0);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    },
+    [value]
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (shouldShowMentionMenu) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightedMentionIndex((current) =>
+          filteredMentions.length === 0
+            ? 0
+            : (current + 1) % filteredMentions.length
+        );
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightedMentionIndex((current) =>
+          filteredMentions.length === 0
+            ? 0
+            : (current - 1 + filteredMentions.length) % filteredMentions.length
+        );
+        return;
+      }
+      if (
+        (e.key === 'Enter' || e.key === 'Tab') &&
+        filteredMentions[highlightedMentionIndex]
+      ) {
+        e.preventDefault();
+        selectMention(filteredMentions[highlightedMentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        return;
+      }
+    }
+
     if (shouldShowSkillMenu) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -969,6 +1051,57 @@ export function ChatInput({
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Skill Suggestions */}
+      {shouldShowMentionMenu && (
+        <div className="border-border bg-popover absolute right-3 bottom-full left-3 z-30 mb-2 overflow-hidden rounded-xl border shadow-lg">
+          <div className="border-border text-muted-foreground flex items-center justify-between border-b px-3 py-2 text-xs">
+            <span>选择协作助手</span>
+            <span>Enter to mention</span>
+          </div>
+          <div className="grid max-h-80 gap-2 overflow-y-auto p-2 sm:grid-cols-2">
+            {filteredMentions.length > 0 ? (
+              filteredMentions.map((mention, index) => {
+                const Icon = mention.icon ?? Bot;
+
+                return (
+                  <button
+                    key={mention.id}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectMention(mention)}
+                    onMouseEnter={() => setHighlightedMentionIndex(index)}
+                    className={cn(
+                      'flex min-h-16 w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors',
+                      index === highlightedMentionIndex
+                        ? 'border-primary/35 bg-primary/10 text-primary'
+                        : 'border-border hover:bg-accent/70'
+                    )}
+                  >
+                    <span className="bg-primary/10 text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg">
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="text-foreground block truncate text-sm font-semibold">
+                        @{mention.label}
+                      </span>
+                      {mention.description && (
+                        <span className="text-muted-foreground mt-0.5 line-clamp-2 block text-xs leading-5">
+                          {mention.description}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="text-muted-foreground col-span-2 px-3 py-3 text-sm">
+                没有匹配的助手
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1157,6 +1290,7 @@ export function ChatInput({
 
           {/* Capability chips */}
           {isHome &&
+            showCapabilities &&
             visibleCapabilities.map((capability) => {
               const Icon = capability.icon;
               const isSelected = selectedCapabilityIds.includes(capability.id);
