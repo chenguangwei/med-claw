@@ -29,6 +29,12 @@ import {
 import { getAppDataDir, getFileName } from '@/shared/lib/paths';
 
 const AGENT_SERVER_URL = API_BASE_URL;
+const AGENT_SERVER_READY_TIMEOUT_MS = import.meta.env.PROD ? 30_000 : 15_000;
+const AGENT_SERVER_HEALTH_TIMEOUT_MS = 1_500;
+const AGENT_SERVER_READY_INITIAL_DELAY_MS = 250;
+const AGENT_SERVER_READY_MAX_DELAY_MS = 1_500;
+
+let agentServerReady = false;
 
 // Helper to get current language translations
 function getErrorMessages() {
@@ -149,7 +155,8 @@ function formatFetchError(error: unknown, _endpoint: string): string {
   if (
     message === 'Load failed' ||
     message === 'Failed to fetch' ||
-    message.includes('NetworkError')
+    message.includes('NetworkError') ||
+    message.includes('Network request failed')
   ) {
     return t.connectionFailedFinal;
   }
@@ -170,6 +177,116 @@ function formatFetchError(error: unknown, _endpoint: string): string {
   return t.requestFailed.replace('{message}', message);
 }
 
+function createAbortError(): Error {
+  const error = new Error('Request aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function isNetworkFetchError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return (
+    message === 'Load failed' ||
+    message === 'Failed to fetch' ||
+    message.includes('NetworkError') ||
+    message.includes('Network request failed') ||
+    message.includes('ECONNREFUSED')
+  );
+}
+
+function sleepWithAbort(duration: number, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortError());
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal?.removeEventListener('abort', handleAbort);
+      resolve();
+    }, duration);
+
+    const handleAbort = () => {
+      window.clearTimeout(timeout);
+      reject(createAbortError());
+    };
+
+    signal?.addEventListener('abort', handleAbort, { once: true });
+  });
+}
+
+async function fetchHealth(signal?: AbortSignal): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    AGENT_SERVER_HEALTH_TIMEOUT_MS
+  );
+
+  const handleAbort = () => controller.abort();
+  if (signal?.aborted) {
+    controller.abort();
+  }
+  signal?.addEventListener('abort', handleAbort, { once: true });
+
+  try {
+    return await fetch(`${AGENT_SERVER_URL}/health`, {
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+    signal?.removeEventListener('abort', handleAbort);
+  }
+}
+
+async function waitForAgentServerReady(signal?: AbortSignal): Promise<void> {
+  if (agentServerReady) return;
+
+  const startedAt = Date.now();
+  let lastError: unknown = null;
+  let attempt = 0;
+
+  while (Date.now() - startedAt < AGENT_SERVER_READY_TIMEOUT_MS) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+
+    try {
+      const response = await fetchHealth(signal);
+      if (response.ok) {
+        agentServerReady = true;
+        return;
+      }
+      lastError = new Error(`Health check failed: ${response.status}`);
+    } catch (error) {
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+      lastError = error;
+    }
+
+    const elapsed = Date.now() - startedAt;
+    const remaining = AGENT_SERVER_READY_TIMEOUT_MS - elapsed;
+    if (remaining <= 0) break;
+
+    const delay = Math.min(
+      AGENT_SERVER_READY_INITIAL_DELAY_MS * 1.5 ** attempt,
+      AGENT_SERVER_READY_MAX_DELAY_MS,
+      remaining
+    );
+    attempt += 1;
+    await sleepWithAbort(delay, signal);
+  }
+
+  if (
+    lastError instanceof Error &&
+    lastError.name !== 'AbortError' &&
+    !isNetworkFetchError(lastError)
+  ) {
+    throw lastError;
+  }
+  throw new Error('Failed to fetch');
+}
+
 // Fetch with retry logic for better resilience
 async function fetchWithRetry(
   url: string,
@@ -179,6 +296,14 @@ async function fetchWithRetry(
 ): Promise<Response> {
   let lastError: Error | null = null;
   const t = getErrorMessages();
+  const abortSignal =
+    options.signal instanceof AbortSignal ? options.signal : undefined;
+  const shouldWaitForAgentServer =
+    url.startsWith(AGENT_SERVER_URL) && !url.includes('/health');
+
+  if (shouldWaitForAgentServer) {
+    await waitForAgentServerReady(abortSignal);
+  }
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -186,7 +311,6 @@ async function fetchWithRetry(
       return response;
     } catch (error) {
       lastError = error as Error;
-      const errorMessage = lastError.message || '';
 
       // Don't retry if aborted
       if (lastError.name === 'AbortError') {
@@ -194,13 +318,7 @@ async function fetchWithRetry(
       }
 
       // Only retry on network errors
-      const isNetworkError =
-        errorMessage === 'Load failed' ||
-        errorMessage === 'Failed to fetch' ||
-        errorMessage.includes('NetworkError') ||
-        errorMessage.includes('ECONNREFUSED');
-
-      if (!isNetworkError) {
+      if (!isNetworkFetchError(error)) {
         throw lastError;
       }
 
@@ -211,11 +329,14 @@ async function fetchWithRetry(
           .replace('{attempt}', String(attempt + 1))
           .replace('{max}', String(maxRetries));
         console.log(`[useAgent] ${retryMsg} (${delay}ms)`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await sleepWithAbort(delay, abortSignal);
       }
     }
   }
 
+  if (shouldWaitForAgentServer) {
+    agentServerReady = false;
+  }
   throw lastError || new Error('Fetch failed after retries');
 }
 
@@ -345,29 +466,44 @@ function getSkillsConfig():
 }
 
 // Helper to get MCP configuration from settings
-function getMcpConfig():
+function getMcpConfig(executionScope?: AgentExecutionScope):
   | {
       enabled: boolean;
       userDirEnabled: boolean;
       appDirEnabled: boolean;
       mcpConfigPath?: string;
+      includeServers?: string[];
     }
   | undefined {
   try {
     const settings = getSettings();
 
-    // If global switch is off, return undefined (no MCP)
     if (settings.mcpEnabled === false) {
       console.log('[useAgent] MCP disabled globally');
-      return undefined;
+      return {
+        enabled: false,
+        userDirEnabled: false,
+        appDirEnabled: false,
+        mcpConfigPath: settings.mcpConfigPath || undefined,
+      };
     }
 
-    const config = {
+    const config: {
+      enabled: boolean;
+      userDirEnabled: boolean;
+      appDirEnabled: boolean;
+      mcpConfigPath?: string;
+      includeServers?: string[];
+    } = {
       enabled: true,
       userDirEnabled: settings.mcpUserDirEnabled !== false,
       appDirEnabled: settings.mcpAppDirEnabled !== false,
       mcpConfigPath: settings.mcpConfigPath || undefined,
     };
+
+    if (executionScope?.mcpServerNames?.length) {
+      config.includeServers = executionScope.mcpServerNames;
+    }
 
     console.log('[useAgent] MCP config:', config);
     return config;
@@ -412,6 +548,15 @@ export interface MessageAttachment {
   mimeType?: string;
   path?: string; // File path when loaded from disk
   isLoading?: boolean; // True when attachment is being loaded
+}
+
+export interface AgentExecutionScope {
+  /** Names of selected skills, used for prompt steering. */
+  skillNames?: string[];
+  /** Real MCP server names to mount for this run. */
+  mcpServerNames?: string[];
+  /** User-visible assistant scope instruction to prepend to the prompt. */
+  instruction?: string;
 }
 
 export interface AgentMessage {
@@ -499,14 +644,16 @@ export interface UseAgentReturn {
     existingTaskId?: string,
     sessionInfo?: SessionInfo,
     attachments?: MessageAttachment[],
-    mode?: 'auto' | 'chat' | 'task'
+    mode?: 'auto' | 'chat' | 'task',
+    executionScope?: AgentExecutionScope
   ) => Promise<string>;
   approvePlan: () => Promise<void>;
   rejectPlan: () => void;
   continueConversation: (
     reply: string,
     attachments?: MessageAttachment[],
-    mode?: 'auto' | 'chat' | 'task'
+    mode?: 'auto' | 'chat' | 'task',
+    executionScope?: AgentExecutionScope
   ) => Promise<void>;
   stopAgent: () => Promise<void>;
   clearMessages: () => void;
@@ -922,6 +1069,7 @@ export function useAgent(): UseAgentReturn {
   const taskIdRef = useRef<string | null>(null);
   const isRunningRef = useRef<boolean>(false);
   const initialPromptRef = useRef<string>('');
+  const executionScopeRef = useRef<AgentExecutionScope | undefined>(undefined);
 
   // Keep refs in sync with state (for use in callbacks to avoid stale closures)
   useEffect(() => {
@@ -1149,6 +1297,10 @@ export function useAgent(): UseAgentReturn {
                   type: msg.type as AgentMessage['type'],
                   content: msg.content || undefined,
                   name: msg.tool_name || undefined,
+                  id:
+                    msg.type === 'tool_use'
+                      ? msg.tool_use_id || undefined
+                      : undefined,
                   input: msg.tool_input
                     ? JSON.parse(msg.tool_input)
                     : undefined,
@@ -1295,6 +1447,7 @@ export function useAgent(): UseAgentReturn {
         } else if (msg.type === 'tool_use') {
           agentMessages.push({
             type: 'tool_use' as const,
+            id: msg.tool_use_id || undefined,
             name: msg.tool_name || undefined,
             input: msg.tool_input ? JSON.parse(msg.tool_input) : undefined,
           });
@@ -1488,6 +1641,7 @@ export function useAgent(): UseAgentReturn {
       // Track tool execution progress for updating plan steps
       let completedToolCount = 0;
       let totalToolCount = 0;
+      let finalResultSubtype: string | undefined;
 
       // Helper to check if this stream is still for the active task
       const isActiveTask = () => activeTaskIdRef.current === currentTaskId;
@@ -1512,6 +1666,10 @@ export function useAgent(): UseAgentReturn {
               // Check if this is the active task for UI updates
               const isActive = isActiveTask();
 
+              if (data.type === 'result') {
+                finalResultSubtype = data.subtype;
+              }
+
               if (data.type === 'session') {
                 if (isActive) {
                   sessionIdRef.current = data.sessionId || null;
@@ -1522,18 +1680,20 @@ export function useAgent(): UseAgentReturn {
 
                 // UI updates only for active task
                 if (isActive) {
-                  // Stream ended - mark all plan steps as completed
+                  const shouldCompletePlan = finalResultSubtype === 'success';
                   setPendingPermission(null);
-                  setPlan((currentPlan) => {
-                    if (!currentPlan) return currentPlan;
-                    return {
-                      ...currentPlan,
-                      steps: currentPlan.steps.map((step) => ({
-                        ...step,
-                        status: 'completed' as const,
-                      })),
-                    };
-                  });
+                  if (shouldCompletePlan) {
+                    setPlan((currentPlan) => {
+                      if (!currentPlan) return currentPlan;
+                      return {
+                        ...currentPlan,
+                        steps: currentPlan.steps.map((step) => ({
+                          ...step,
+                          status: 'completed' as const,
+                        })),
+                      };
+                    });
+                  }
                 }
               } else if (data.type === 'permission_request') {
                 // Handle permission request - only for active task
@@ -1677,7 +1837,7 @@ export function useAgent(): UseAgentReturn {
                       ? JSON.stringify(data.input)
                       : undefined,
                     tool_output: data.output,
-                    tool_use_id: data.toolUseId,
+                    tool_use_id: data.toolUseId || data.id,
                     subtype: data.subtype,
                     error_message: data.message,
                   });
@@ -1711,7 +1871,8 @@ export function useAgent(): UseAgentReturn {
       existingTaskId?: string,
       sessionInfo?: SessionInfo,
       attachments?: MessageAttachment[],
-      mode?: 'auto' | 'chat' | 'task'
+      mode?: 'auto' | 'chat' | 'task',
+      executionScope?: AgentExecutionScope
     ): Promise<string> => {
       // If there's already a running task, move it to background
       if (isRunning && abortControllerRef.current && taskId) {
@@ -1734,6 +1895,7 @@ export function useAgent(): UseAgentReturn {
       isRunningRef.current = true; // Sync update ref immediately
       setMessages([]);
       setInitialPrompt(prompt);
+      executionScopeRef.current = executionScope;
       setPhase('planning');
       setPlan(null);
 
@@ -1847,7 +2009,10 @@ export function useAgent(): UseAgentReturn {
       // Save file attachments to disk and augment prompt with file paths
       const fileAttachments =
         attachments?.filter((a) => a.type === 'file') || [];
-      let augmentedPrompt = prompt;
+      const scopedPrompt = executionScope?.instruction
+        ? `${executionScope.instruction}\n${prompt}`
+        : prompt;
+      let augmentedPrompt = scopedPrompt;
       let savedFileRefs: AttachmentReference[] = [];
 
       if (fileAttachments.length > 0) {
@@ -1873,7 +2038,7 @@ export function useAgent(): UseAgentReturn {
 
             // Append file paths to prompt so the agent knows about them
             const filePaths = savedFileRefs.map((r) => r.path).join('\n');
-            augmentedPrompt = `${prompt}\n\n[Attached files]\n${filePaths}`;
+            augmentedPrompt = `${scopedPrompt}\n\n[Attached files]\n${filePaths}`;
           } catch (error) {
             console.error('[useAgent] Failed to save file attachments:', error);
           }
@@ -1902,7 +2067,7 @@ export function useAgent(): UseAgentReturn {
               return `[File: ${a.name}] (binary file, unable to include inline)`;
             })
             .join('\n\n');
-          augmentedPrompt = `${prompt}\n\n${fileInfo}`;
+          augmentedPrompt = `${scopedPrompt}\n\n${fileInfo}`;
         }
       }
 
@@ -1937,6 +2102,8 @@ export function useAgent(): UseAgentReturn {
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
+          !executionScope?.instruction &&
+          !executionScope?.mcpServerNames?.length &&
           !isSlashCommand(prompt) &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(prompt)));
@@ -2054,13 +2221,19 @@ export function useAgent(): UseAgentReturn {
           return currentTaskId;
         }
 
-        // Images and slash skill commands must use direct execution.
+        // Explicit task mode should use the full agent path immediately.
         // Planning has no tools, and fast chat bypasses skills entirely.
-        const shouldUseDirectAgent = hasImages || isSlashCommand(prompt);
+        const shouldUseDirectAgent =
+          mode === 'task' ||
+          hasImages ||
+          isSlashCommand(prompt) ||
+          !!executionScope?.mcpServerNames?.length;
         if (shouldUseDirectAgent) {
           console.log('[useAgent] Using direct execution', {
+            mode,
             hasImages,
             isSlashCommand: isSlashCommand(prompt),
+            mcpServerNames: executionScope?.mcpServerNames,
           });
           setPhase('executing');
 
@@ -2106,7 +2279,7 @@ export function useAgent(): UseAgentReturn {
           const skillsConfig = getSkillsConfig();
           const language = getPreferredLanguage();
 
-          const mcpConfig = getMcpConfig();
+          const mcpConfig = getMcpConfig(executionScope);
 
           // Use direct execution endpoint with images
           const response = await fetchWithRetry(`${AGENT_SERVER_URL}/agent`, {
@@ -2372,8 +2545,11 @@ export function useAgent(): UseAgentReturn {
       const modelConfig = getModelConfig();
       const sandboxConfig = getSandboxConfig();
       const skillsConfig = getSkillsConfig();
-      const mcpConfig = getMcpConfig();
+      const mcpConfig = getMcpConfig(executionScopeRef.current);
       const language = getPreferredLanguage();
+      const scopedInitialPrompt = executionScopeRef.current?.instruction
+        ? `${executionScopeRef.current.instruction}\n${initialPrompt}`
+        : initialPrompt;
 
       const response = await fetchWithRetry(
         `${AGENT_SERVER_URL}/agent/execute`,
@@ -2384,7 +2560,7 @@ export function useAgent(): UseAgentReturn {
           },
           body: JSON.stringify({
             planId: plan.id,
-            prompt: initialPrompt,
+            prompt: scopedInitialPrompt,
             workDir,
             taskId,
             modelConfig,
@@ -2435,17 +2611,12 @@ export function useAgent(): UseAgentReturn {
         setPlan(null); // Clear plan state to prevent showing confirmation box again
         abortControllerRef.current = null;
 
-        // Mark task as completed in database
-        try {
-          await updateTask(taskId, { status: 'completed' });
-        } catch (dbError) {
-          console.error('Failed to mark task as completed:', dbError);
-        }
-
         // Reload messages from database to ensure all are displayed
         // (in case some were missed during streaming)
         try {
           const dbMessages = await getMessagesByTaskId(taskId);
+          const task = await getTask(taskId);
+          const shouldMarkPlanComplete = task?.status === 'completed';
           const agentMessages: AgentMessage[] = [];
           for (const msg of dbMessages) {
             if (msg.type === 'user') {
@@ -2461,6 +2632,7 @@ export function useAgent(): UseAgentReturn {
             } else if (msg.type === 'tool_use') {
               agentMessages.push({
                 type: 'tool_use' as const,
+                id: msg.tool_use_id || undefined,
                 name: msg.tool_name || undefined,
                 input: msg.tool_input ? JSON.parse(msg.tool_input) : undefined,
               });
@@ -2486,16 +2658,17 @@ export function useAgent(): UseAgentReturn {
                   ? (JSON.parse(msg.content) as TaskPlan)
                   : undefined;
                 if (planData) {
-                  const completedPlan: TaskPlan = {
-                    ...planData,
-                    steps: planData.steps.map((s) => ({
-                      ...s,
-                      status: 'completed' as const,
-                    })),
-                  };
                   agentMessages.push({
                     type: 'plan' as const,
-                    plan: completedPlan,
+                    plan: shouldMarkPlanComplete
+                      ? {
+                          ...planData,
+                          steps: planData.steps.map((s) => ({
+                            ...s,
+                            status: 'completed' as const,
+                          })),
+                        }
+                      : planData,
                   });
                 }
               } catch {
@@ -2544,9 +2717,18 @@ export function useAgent(): UseAgentReturn {
     async (
       reply: string,
       attachments?: MessageAttachment[],
-      mode?: 'auto' | 'chat' | 'task'
+      mode?: 'auto' | 'chat' | 'task',
+      executionScope?: AgentExecutionScope
     ): Promise<void> => {
       if (isRunning || !taskId) return;
+      if (executionScope) {
+        executionScopeRef.current = executionScope;
+      }
+      const currentExecutionScope = executionScope || executionScopeRef.current;
+      const scopedReply =
+        currentExecutionScope?.instruction && !isSlashCommand(reply)
+          ? `${currentExecutionScope.instruction}\n${reply}`
+          : reply;
 
       // Add user message to UI immediately (with attachments if any)
       const userMessage: AgentMessage = {
@@ -2603,7 +2785,7 @@ export function useAgent(): UseAgentReturn {
         const modelConfig = getModelConfig();
         const sandboxConfig = getSandboxConfig();
         const skillsConfig = getSkillsConfig();
-        const mcpConfig = getMcpConfig();
+        const mcpConfig = getMcpConfig(currentExecutionScope);
 
         // Prepare images for API (only send image attachments with actual data)
         const images = attachments
@@ -2636,6 +2818,8 @@ export function useAgent(): UseAgentReturn {
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
+          !currentExecutionScope?.instruction &&
+          !currentExecutionScope?.mcpServerNames?.length &&
           !isSlashCommand(reply) &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(reply)));
@@ -2655,7 +2839,7 @@ export function useAgent(): UseAgentReturn {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                prompt: reply,
+                prompt: scopedReply,
                 modelConfig,
                 language,
                 conversation: conversationHistory,
@@ -2754,7 +2938,7 @@ export function useAgent(): UseAgentReturn {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            prompt: reply,
+            prompt: scopedReply,
             conversation: conversationHistory,
             workDir,
             taskId,

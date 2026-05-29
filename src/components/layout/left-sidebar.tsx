@@ -25,9 +25,7 @@ import { useLanguage } from '@/shared/providers/language-provider';
 import {
   ArrowRight,
   BadgeDollarSign,
-  BrainCircuit,
   BriefcaseBusiness,
-  Calculator,
   Calendar,
   CalendarCheck,
   ChevronLeft,
@@ -35,7 +33,6 @@ import {
   CircleCheck,
   ClipboardList,
   Clock,
-  Database,
   ExternalLink,
   File,
   FileCode,
@@ -46,7 +43,6 @@ import {
   Globe,
   Loader2,
   MessageSquare,
-  Mic,
   MoreHorizontal,
   PanelLeft,
   PauseCircle,
@@ -72,6 +68,16 @@ import { SettingsModal } from '@/components/settings';
 import { API_BASE_URL } from '@/components/settings/constants';
 import { MCPSettings } from '@/components/settings/tabs/MCPSettings';
 import type { SettingsCategory } from '@/components/settings/types';
+import {
+  buildMcpAllConfigsUrl,
+  capabilityExtensionCategories,
+  loadConfiguredMcpCapabilityExtensions,
+  mockMcpCapabilityExtensions,
+  officialCapabilityExtensions,
+  type CapabilityExtension,
+  type CapabilityExtensionCategory,
+  type McpCapabilityConfigTemplate,
+} from '@/components/shared/capability-extensions';
 import { SkillsPlaza } from '@/components/skills/SkillsPlaza';
 import {
   Dialog,
@@ -117,6 +123,7 @@ interface SidebarAssistant {
   description?: string;
   skills?: string[];
   mcps?: string[];
+  mcpServerNames?: string[];
 }
 
 const CUSTOM_ASSISTANTS_STORAGE_KEY = 'uniins-claw:custom-assistants';
@@ -192,7 +199,14 @@ const ASSISTANT_SKILL_OPTIONS = [
   },
 ] as const;
 
-const ASSISTANT_MCP_OPTIONS = [
+interface AssistantMcpOption {
+  id: string;
+  label: string;
+  description: string;
+  serverName?: string;
+}
+
+const ASSISTANT_MCP_OPTIONS: AssistantMcpOption[] = [
   {
     id: 'knowledge-base',
     label: '知识库',
@@ -223,7 +237,7 @@ const ASSISTANT_MCP_OPTIONS = [
     label: '渠道产品库',
     description: '按代理人渠道读取可售、停售和权限内产品。',
   },
-] as const;
+];
 
 const ASSISTANT_OPTION_PAGE_SIZE = 4;
 
@@ -249,6 +263,7 @@ function dispatchAssistantSelection(assistant: SidebarAssistant) {
         capabilityId: assistant.capabilityId ?? null,
         skills: assistant.skills ?? [],
         mcps: assistant.mcps ?? [],
+        mcpServerNames: assistant.mcpServerNames ?? [],
       },
     })
   );
@@ -258,6 +273,10 @@ function dispatchCollaborationSessionStart() {
   window.dispatchEvent(
     new CustomEvent('uniins-claw:collaboration-session-start')
   );
+}
+
+function dispatchNewSessionStart() {
+  window.dispatchEvent(new CustomEvent('uniins-claw:new-session-start'));
 }
 
 function getInitial(name: string) {
@@ -453,6 +472,13 @@ export function LeftSidebar({
   const handleTaskAssistant = () => {
     setLeftOpen(true);
     setPanelCategory(null);
+    navigate('/');
+  };
+
+  const handleNewSession = () => {
+    setLeftOpen(true);
+    setPanelCategory(null);
+    setSettingsOpen(false);
     navigate('/');
   };
 
@@ -663,6 +689,8 @@ export function LeftSidebar({
               onToggleFavorite={handleToggleFavorite}
               onRenameTask={handleRenameClick}
               onDeleteTask={handleDeleteClick}
+              onNewSession={handleNewSession}
+              settings={settings}
               t={t}
             />
           )}
@@ -839,127 +867,21 @@ function SettingsInlinePanel({
   );
 }
 
-type AbilityCategoryKey =
-  | '全部'
-  | '医疗健康'
-  | '语音识别'
-  | '文档智能'
-  | '业务风控'
-  | '数据处理';
+type AbilityCategoryKey = CapabilityExtensionCategory;
+type AIAbility = CapabilityExtension;
 
-interface AIAbility {
-  id: string;
-  name: string;
-  description: string;
-  category: AbilityCategoryKey;
-  tags: string[];
-  provider: string;
-  usage: string;
-  connected: boolean;
-  featured?: boolean;
-  icon: React.ComponentType<{ className?: string }>;
-  accent: string;
-}
-
-type AIAbilityTab = 'overview' | 'official' | 'connected' | 'manage';
+type AIAbilityTab = 'overview' | 'official' | 'mcp' | 'connected' | 'manage';
 
 const aiAbilityTabs: Array<{ key: AIAbilityTab; label: string }> = [
-  { key: 'overview', label: '能力总览' },
-  { key: 'official', label: '官方能力' },
+  { key: 'overview', label: '全部能力' },
+  { key: 'official', label: 'AI 能力广场' },
+  { key: 'mcp', label: 'MCP 服务' },
   { key: 'connected', label: '已接入' },
-  { key: 'manage', label: '能力管理' },
+  { key: 'manage', label: '配置管理' },
 ];
 
-const abilityCategories: AbilityCategoryKey[] = [
-  '全部',
-  '医疗健康',
-  '语音识别',
-  '文档智能',
-  '业务风控',
-  '数据处理',
-];
-
-const aiAbilities: AIAbility[] = [
-  {
-    id: 'claim-calculation',
-    name: '理算技能',
-    description:
-      '面向保险理赔场景，自动识别责任、保额、免赔额与赔付规则，输出可追溯的理算结果。',
-    category: '医疗健康',
-    tags: ['责任判断', '赔付试算', '规则引擎', '结果追溯'],
-    provider: 'U2 能力',
-    usage: '18.6k 调用',
-    connected: false,
-    featured: true,
-    icon: Calculator,
-    accent: 'from-orange-100 to-amber-50 text-orange-500 border-orange-100',
-  },
-  {
-    id: 'medical-insurance-audit',
-    name: '医保审核技能',
-    description:
-      '校验医保目录、诊疗项目、用药合规与报销限制，辅助完成费用合规审核。',
-    category: '医疗健康',
-    tags: ['医保目录', '费用审核', '合规校验'],
-    provider: 'U2 能力',
-    usage: '12.8k 调用',
-    connected: false,
-    icon: ShieldCheck,
-    accent: 'from-emerald-100 to-teal-50 text-emerald-600 border-emerald-100',
-  },
-  {
-    id: 'asr',
-    name: 'ASR 技能',
-    description:
-      '将录音、通话与会议音频转写为结构化文本，支持说话人分离与关键词抽取。',
-    category: '语音识别',
-    tags: ['语音转写', '说话人分离', '关键词'],
-    provider: 'U2 能力',
-    usage: '32.1k 调用',
-    connected: true,
-    icon: Mic,
-    accent: 'from-indigo-100 to-blue-50 text-indigo-600 border-indigo-100',
-  },
-  {
-    id: 'ocr',
-    name: 'OCR 技能',
-    description:
-      '识别发票、保单、病历、身份证与表格影像内容，输出字段级结构化结果。',
-    category: '文档智能',
-    tags: ['票据识别', '证照识别', '结构化抽取'],
-    provider: 'U2 能力',
-    usage: '28.4k 调用',
-    connected: true,
-    icon: FileText,
-    accent: 'from-sky-100 to-cyan-50 text-sky-600 border-sky-100',
-  },
-  {
-    id: 'risk-control',
-    name: '风控核验技能',
-    description:
-      '结合业务规则与历史行为信号，识别异常申报、重复材料和高风险操作。',
-    category: '业务风控',
-    tags: ['异常检测', '重复核验', '风险评分'],
-    provider: 'U2 能力',
-    usage: '9.7k 调用',
-    connected: false,
-    icon: BrainCircuit,
-    accent: 'from-violet-100 to-purple-50 text-violet-600 border-violet-100',
-  },
-  {
-    id: 'data-normalization',
-    name: '数据标准化技能',
-    description:
-      '清洗业务表单与接口返回数据，统一字段命名、枚举值、单位和日期格式。',
-    category: '数据处理',
-    tags: ['字段映射', '数据清洗', '格式统一'],
-    provider: 'U2 能力',
-    usage: '7.3k 调用',
-    connected: false,
-    icon: Database,
-    accent: 'from-cyan-100 to-teal-50 text-cyan-600 border-cyan-100',
-  },
-];
+const abilityCategories = capabilityExtensionCategories;
+const aiAbilities = officialCapabilityExtensions;
 
 function AIAbilityPlazaPanel({
   settings,
@@ -972,8 +894,97 @@ function AIAbilityPlazaPanel({
   const [activeCategory, setActiveCategory] =
     useState<AbilityCategoryKey>('全部');
   const [searchQuery, setSearchQuery] = useState('');
+  const [configuredMcpAbilities, setConfiguredMcpAbilities] = useState<
+    AIAbility[]
+  >([]);
+  const [mcpConfigRequest, setMcpConfigRequest] = useState<{
+    id: number;
+    serverName?: string | null;
+    template?: McpCapabilityConfigTemplate | null;
+  }>({ id: 0 });
 
-  const visibleAbilities = aiAbilities.filter((ability) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadConfiguredMcpAbilities() {
+      try {
+        const abilities = await loadConfiguredMcpCapabilityExtensions(settings);
+        if (!cancelled) {
+          setConfiguredMcpAbilities(abilities);
+        }
+      } catch (error) {
+        console.error(
+          '[AIAbilityPlazaPanel] Failed to load MCP config:',
+          error
+        );
+      }
+    }
+
+    void loadConfiguredMcpAbilities();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings]);
+
+  const configuredMcpByName = new Map(
+    configuredMcpAbilities.map((ability) => [
+      ability.mcpServerName || ability.name,
+      ability,
+    ])
+  );
+  const applyConfiguredMcpState = (ability: AIAbility): AIAbility => {
+    const serverName =
+      ability.mcpServerName || ability.mcpConfigTemplate?.serverName;
+    if (!serverName) return ability;
+
+    const configuredAbility = configuredMcpByName.get(serverName);
+    if (!configuredAbility) return ability;
+
+    return {
+      ...ability,
+      connected: true,
+      provider: configuredAbility.provider,
+      usage: configuredAbility.usage,
+      icon: configuredAbility.icon,
+      accent: configuredAbility.accent,
+      iconKey: configuredAbility.iconKey || ability.iconKey,
+      mcpServerName: serverName,
+      mcpConfigTemplate:
+        configuredAbility.mcpConfigTemplate || ability.mcpConfigTemplate,
+    };
+  };
+
+  const staticMcpServerNames = new Set(
+    [...mockMcpCapabilityExtensions, ...aiAbilities]
+      .map(
+        (ability) =>
+          ability.mcpServerName || ability.mcpConfigTemplate?.serverName
+      )
+      .filter(Boolean)
+  );
+  const mockMcpAbilities = mockMcpCapabilityExtensions.map(
+    applyConfiguredMcpState
+  );
+  const staticAbilities = aiAbilities.map(applyConfiguredMcpState);
+  const customConfiguredMcpAbilities = configuredMcpAbilities.filter(
+    (ability) =>
+      !staticMcpServerNames.has(ability.mcpServerName || ability.name)
+  );
+  const allAbilities = [
+    ...mockMcpAbilities,
+    ...customConfiguredMcpAbilities,
+    ...staticAbilities,
+  ];
+  const visibleAbilities = allAbilities.filter((ability) => {
+    if (activeTab === 'official' && ability.kind !== 'official') return false;
+    if (
+      activeTab === 'mcp' &&
+      ability.kind !== 'mcp' &&
+      !ability.mcpConfigTemplate
+    ) {
+      return false;
+    }
     if (activeTab === 'connected' && !ability.connected) return false;
     const matchesCategory =
       activeCategory === '全部' || ability.category === activeCategory;
@@ -992,6 +1003,18 @@ function AIAbilityPlazaPanel({
     (ability) => ability !== featuredAbility
   );
 
+  const openAbilityConfig = (ability: AIAbility) => {
+    setActiveTab('manage');
+    if (!ability.mcpServerName && !ability.mcpConfigTemplate) return;
+
+    setMcpConfigRequest((current) => ({
+      id: current.id + 1,
+      serverName:
+        ability.mcpServerName || ability.mcpConfigTemplate?.serverName || null,
+      template: ability.mcpConfigTemplate || null,
+    }));
+  };
+
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden border-l border-slate-200 bg-white">
       <div className="relative shrink-0 overflow-hidden border-b border-slate-200 bg-gradient-to-br from-white via-orange-50/25 to-blue-50 px-12 py-8">
@@ -999,11 +1022,20 @@ function AIAbilityPlazaPanel({
         <div className="relative z-10 flex items-start justify-between gap-8">
           <div>
             <h1 className="text-4xl font-bold tracking-normal text-slate-950">
-              AI 能力广场
+              能力扩展
             </h1>
             <p className="mt-3 text-base text-slate-600">
-              统一接入业务 AI 能力，按场景组合理算、审核、识别与数据处理服务。
+              汇总 AI 能力广场能力与本机已配置 MCP
+              服务，用于给助手挂载真实工具能力。
             </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <span className="rounded-full border border-orange-100 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-600">
+                {aiAbilities.length} 项 AI 能力
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+                {configuredMcpAbilities.length} 个 MCP 服务
+              </span>
+            </div>
           </div>
 
           <div className="flex min-w-[520px] items-center gap-5">
@@ -1026,7 +1058,14 @@ function AIAbilityPlazaPanel({
             <button
               key={tab.key}
               type="button"
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => {
+                setActiveTab(tab.key);
+                if (tab.key === 'mcp') {
+                  setActiveCategory('全部');
+                } else if (activeCategory === 'MCP 服务') {
+                  setActiveCategory('全部');
+                }
+              }}
               className={cn(
                 'relative h-full px-1 text-base font-semibold transition',
                 activeTab === tab.key
@@ -1058,6 +1097,9 @@ function AIAbilityPlazaPanel({
             <MCPSettings
               settings={settings}
               onSettingsChange={onSettingsChange}
+              focusRequestId={mcpConfigRequest.id}
+              initialServerName={mcpConfigRequest.serverName}
+              initialServerTemplate={mcpConfigRequest.template}
             />
           </div>
         </div>
@@ -1086,7 +1128,9 @@ function AIAbilityPlazaPanel({
 
           {visibleAbilities.length === 0 ? (
             <div className="flex h-60 items-center justify-center rounded-2xl border border-dashed border-slate-200 text-sm text-slate-500">
-              没有匹配的 AI 能力
+              {activeTab === 'mcp'
+                ? '暂无已配置 MCP 服务，可进入配置管理添加。'
+                : '没有匹配的能力扩展'}
             </div>
           ) : (
             <div className="grid grid-cols-12 items-start gap-4">
@@ -1094,7 +1138,7 @@ function AIAbilityPlazaPanel({
                 <AIAbilityCard
                   ability={featuredAbility}
                   featured
-                  onManage={() => setActiveTab('manage')}
+                  onManage={openAbilityConfig}
                 />
               )}
               {regularAbilities.map((ability, index) => (
@@ -1102,7 +1146,7 @@ function AIAbilityPlazaPanel({
                   key={ability.id}
                   ability={ability}
                   wide={index === 0 || index === 3}
-                  onManage={() => setActiveTab('manage')}
+                  onManage={openAbilityConfig}
                 />
               ))}
             </div>
@@ -1122,9 +1166,17 @@ function AIAbilityCard({
   ability: AIAbility;
   featured?: boolean;
   wide?: boolean;
-  onManage: () => void;
+  onManage: (ability: AIAbility) => void;
 }) {
   const Icon = ability.icon;
+  const actionLabel =
+    ability.kind === 'mcp'
+      ? ability.connected
+        ? '管理'
+        : '接入'
+      : ability.connected
+        ? '管理'
+        : '接入';
 
   return (
     <article
@@ -1188,15 +1240,15 @@ function AIAbilityCard({
 
       <div className="mt-auto flex items-center justify-between gap-3 pt-4">
         <div className="flex min-w-0 items-center gap-2 text-xs text-slate-600">
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-700">
-            AI
+          <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-700">
+            {ability.kind === 'mcp' ? 'MCP' : 'AI'}
           </span>
           <span className="truncate font-semibold">{ability.provider}</span>
           <span className="truncate">{ability.usage}</span>
         </div>
         <button
           type="button"
-          onClick={onManage}
+          onClick={() => onManage(ability)}
           className={cn(
             'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-5 text-sm font-semibold transition',
             ability.connected
@@ -1205,7 +1257,7 @@ function AIAbilityCard({
           )}
         >
           {ability.connected && <CircleCheck className="size-4" />}
-          {ability.connected ? '管理' : '接入'}
+          {actionLabel}
         </button>
       </div>
     </article>
@@ -1692,7 +1744,12 @@ function getScheduledTaskExecutionPayload() {
     },
     mcpConfig:
       settings.mcpEnabled === false
-        ? undefined
+        ? {
+            enabled: false,
+            userDirEnabled: false,
+            appDirEnabled: false,
+            mcpConfigPath: settings.mcpConfigPath || undefined,
+          }
         : {
             enabled: true,
             userDirEnabled: settings.mcpUserDirEnabled !== false,
@@ -2043,10 +2100,7 @@ function ScheduledTasksPanel() {
     }
   };
 
-  const openRuns = async (
-    task: ScheduledTaskItem,
-    selectRunId?: string
-  ) => {
+  const openRuns = async (task: ScheduledTaskItem, selectRunId?: string) => {
     setActiveTask(task);
     setRunsOpen(true);
     await loadRuns(task, { selectRunId });
@@ -2600,7 +2654,7 @@ function ScheduledTasksPanel() {
                                 className="rounded-lg border border-slate-200 bg-white p-3"
                               >
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="text-xs font-bold uppercase text-slate-500">
+                                  <span className="text-xs font-bold text-slate-500 uppercase">
                                     {message.type}
                                   </span>
                                   {message.subtype && (
@@ -2609,7 +2663,7 @@ function ScheduledTasksPanel() {
                                     </span>
                                   )}
                                 </div>
-                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+                                <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 break-words whitespace-pre-wrap text-slate-50">
                                   {formatScheduledRunMessage(message)}
                                 </pre>
                               </div>
@@ -2698,6 +2752,8 @@ function TaskAssistantPanel({
   onToggleFavorite,
   onRenameTask,
   onDeleteTask,
+  onNewSession,
+  settings,
   t,
 }: {
   tasks: Task[];
@@ -2708,6 +2764,8 @@ function TaskAssistantPanel({
   onToggleFavorite: (task: Task, e: React.MouseEvent) => void;
   onRenameTask: (task: Task, e: React.MouseEvent) => void;
   onDeleteTask: (taskId: string, e: React.MouseEvent) => void;
+  onNewSession: () => void;
+  settings: SettingsType;
   t: ReturnType<typeof useLanguage>['t'];
 }) {
   const [assistants, setAssistants] = useState<SidebarAssistant[]>(() => {
@@ -2745,6 +2803,9 @@ function TaskAssistantPanel({
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([
     'knowledge-base',
   ]);
+  const [configuredMcpOptions, setConfiguredMcpOptions] = useState<
+    AssistantMcpOption[]
+  >([]);
   const [skillPage, setSkillPage] = useState(0);
   const [mcpPage, setMcpPage] = useState(0);
   const [skillSearchQuery, setSkillSearchQuery] = useState('');
@@ -2760,10 +2821,16 @@ function TaskAssistantPanel({
     ASSISTANT_SKILL_OPTIONS,
     skillSearchQuery
   );
-  const filteredMcpOptions = filterAssistantOptions(
-    ASSISTANT_MCP_OPTIONS,
-    mcpSearchQuery
-  );
+  const mcpOptions = [
+    ...configuredMcpOptions,
+    ...ASSISTANT_MCP_OPTIONS.filter(
+      (option) =>
+        !configuredMcpOptions.some(
+          (configured) => configured.label === option.label
+        )
+    ),
+  ];
+  const filteredMcpOptions = filterAssistantOptions(mcpOptions, mcpSearchQuery);
   const skillPageCount = Math.max(
     1,
     Math.ceil(filteredSkillOptions.length / ASSISTANT_OPTION_PAGE_SIZE)
@@ -2812,6 +2879,69 @@ function TaskAssistantPanel({
     );
   }, [assistants]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadConfiguredMcpOptions() {
+      try {
+        const url = buildMcpAllConfigsUrl(settings);
+        if (!url) {
+          setConfiguredMcpOptions([]);
+          return;
+        }
+
+        const response = await fetch(url);
+        const result = await response.json();
+        if (!result.success || !Array.isArray(result.configs)) return;
+
+        const nextOptions: AssistantMcpOption[] = [];
+        const seen = new Set<string>();
+
+        for (const configInfo of result.configs as Array<{
+          name: string;
+          exists: boolean;
+          servers: Record<
+            string,
+            { command?: string; url?: string; type?: string }
+          >;
+        }>) {
+          if (!configInfo.exists) continue;
+
+          for (const [serverName, serverConfig] of Object.entries(
+            configInfo.servers || {}
+          )) {
+            if (seen.has(serverName)) continue;
+            seen.add(serverName);
+            const transport = serverConfig.url
+              ? serverConfig.type || 'http'
+              : 'stdio';
+            nextOptions.push({
+              id: `configured-mcp-${serverName}`,
+              label: serverName,
+              description: `${configInfo.name} 配置 · ${transport} MCP 服务`,
+              serverName,
+            });
+          }
+        }
+
+        if (!cancelled) {
+          setConfiguredMcpOptions(nextOptions);
+        }
+      } catch (error) {
+        console.error(
+          '[TaskAssistantPanel] Failed to load MCP options:',
+          error
+        );
+      }
+    }
+
+    void loadConfiguredMcpOptions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings]);
+
   const activateAssistant = (assistant: SidebarAssistant) => {
     setActiveAssistantId(assistant.id);
     dispatchAssistantSelection(assistant);
@@ -2825,6 +2955,17 @@ function TaskAssistantPanel({
       initial: 'W',
     });
     dispatchCollaborationSessionStart();
+  };
+
+  const startNewSession = () => {
+    setActiveAssistantId('primary');
+    dispatchAssistantSelection({
+      id: 'primary',
+      name: t.nav.primaryAssistant,
+      initial: 'W',
+    });
+    dispatchNewSessionStart();
+    onNewSession();
   };
 
   const addAssistant = (assistant: SidebarAssistant) => {
@@ -2872,9 +3013,13 @@ function TaskAssistantPanel({
     const skills = ASSISTANT_SKILL_OPTIONS.filter((skill) =>
       selectedSkillIds.includes(skill.id)
     ).map((skill) => skill.label);
-    const mcps = ASSISTANT_MCP_OPTIONS.filter((mcp) =>
+    const selectedMcps = mcpOptions.filter((mcp) =>
       selectedMcpIds.includes(mcp.id)
-    ).map((mcp) => mcp.label);
+    );
+    const mcps = selectedMcps.map((mcp) => mcp.label);
+    const mcpServerNames = selectedMcps
+      .map((mcp) => mcp.serverName)
+      .filter((name): name is string => Boolean(name));
 
     addAssistant({
       id: `assistant-${Date.now()}`,
@@ -2888,6 +3033,7 @@ function TaskAssistantPanel({
           : '未绑定额外技能或 MCP，按通用助手创建。',
       skills,
       mcps,
+      mcpServerNames,
     });
   };
 
@@ -2950,10 +3096,20 @@ function TaskAssistantPanel({
     <>
       <div className="border-sidebar-border bg-background/50 flex h-full min-w-0 flex-1 flex-col border-l">
         <div className="border-sidebar-border shrink-0 border-b px-3 py-4">
-          <p className="text-muted-foreground px-1 text-sm font-medium">
-            {t.nav.myAssistant}
-          </p>
-          <div className="mt-4 space-y-2">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <p className="text-muted-foreground text-sm font-medium">
+              {t.nav.myAssistant}
+            </p>
+            <button
+              type="button"
+              onClick={startNewSession}
+              className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-orange-500 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+            >
+              <Plus className="size-3.5" />
+              {t.nav.newSession}
+            </button>
+          </div>
+          <div className="mt-3 space-y-1.5">
             {assistants.map((assistant) => {
               const active = activeAssistantId === assistant.id;
 
@@ -2961,22 +3117,29 @@ function TaskAssistantPanel({
                 <div
                   key={assistant.id}
                   className={cn(
-                    'group flex min-h-12 w-full items-center gap-1 rounded-xl border p-1 shadow-sm transition-colors',
+                    'group relative flex min-h-11 w-full items-center gap-1 overflow-hidden rounded-lg border p-1 transition-colors',
                     active
-                      ? 'border-orange-200 bg-gradient-to-br from-orange-50 via-white to-orange-100/70 text-orange-600'
-                      : 'border-border bg-background text-sidebar-foreground hover:bg-accent'
+                      ? 'border-orange-200 bg-orange-50 text-orange-700'
+                      : 'text-sidebar-foreground hover:border-border hover:bg-background border-transparent bg-transparent'
                   )}
                 >
+                  <span
+                    className={cn(
+                      'absolute top-2 bottom-2 left-0 w-1 rounded-r-full',
+                      active ? 'bg-orange-500' : 'bg-transparent'
+                    )}
+                  />
                   <button
                     type="button"
                     onClick={() => activateAssistant(assistant)}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left"
+                    aria-current={active ? 'true' : undefined}
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left"
                   >
                     <div
                       className={cn(
-                        'flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold shadow-sm',
+                        'flex size-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold',
                         active
-                          ? 'bg-gradient-to-br from-orange-500 to-amber-400 text-white'
+                          ? 'bg-orange-500 text-white'
                           : 'bg-muted text-muted-foreground'
                       )}
                     >
@@ -2990,9 +3153,6 @@ function TaskAssistantPanel({
                         </span>
                       )}
                     </span>
-                    {active && (
-                      <CircleCheck className="size-5 shrink-0 fill-orange-500 text-white" />
-                    )}
                   </button>
                   {assistant.id !== 'primary' && (
                     <button
@@ -3013,20 +3173,22 @@ function TaskAssistantPanel({
                 </div>
               );
             })}
+          </div>
+          <div className="border-sidebar-border mt-3 grid grid-cols-2 gap-2 border-t pt-3">
             <button
               type="button"
               onClick={() => setCreateAssistantOpen(true)}
-              className="border-border hover:bg-accent bg-background flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-colors"
+              className="border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors"
             >
-              <span className="text-lg leading-none">+</span>
+              <Plus className="size-3.5" />
               {t.nav.createAssistant}
             </button>
             <button
               type="button"
               onClick={startCollaborationSession}
-              className="border-primary/20 bg-primary/10 text-primary hover:bg-primary/15 flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors"
+              className="border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors"
             >
-              <UsersRound className="size-4" />
+              <UsersRound className="size-3.5" />
               协作会话
             </button>
           </div>

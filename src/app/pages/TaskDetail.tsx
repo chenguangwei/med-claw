@@ -18,6 +18,7 @@ import {
 } from '@/shared/db';
 import {
   useAgent,
+  type AgentExecutionScope,
   type AgentMessage,
   type MessageAttachment,
 } from '@/shared/hooks/useAgent';
@@ -63,6 +64,7 @@ interface LocationState {
   taskIndex?: number;
   attachments?: MessageAttachment[];
   mode?: ChatMode;
+  executionScope?: AgentExecutionScope;
 }
 
 // Context for tool selection - allows child components to select tools
@@ -105,6 +107,7 @@ function TaskDetailContent() {
   const initialTaskIndex = state?.taskIndex || 1;
   const initialAttachments = state?.attachments;
   const initialMode = state?.mode;
+  const initialExecutionScope = state?.executionScope;
 
   const {
     messages,
@@ -790,7 +793,8 @@ function TaskDetailContent() {
           taskId,
           sessionInfo,
           initialAttachments,
-          initialMode
+          initialMode,
+          initialExecutionScope
         );
         const newTask = await loadTask(taskId);
         setTask(newTask);
@@ -809,7 +813,8 @@ function TaskDetailContent() {
     async (
       text: string,
       messageAttachments?: MessageAttachment[],
-      mode?: ChatMode
+      mode?: ChatMode,
+      executionScope?: AgentExecutionScope
     ) => {
       if (
         (text.trim() ||
@@ -817,7 +822,12 @@ function TaskDetailContent() {
         !isRunning &&
         taskId
       ) {
-        await continueConversation(text.trim(), messageAttachments, mode);
+        await continueConversation(
+          text.trim(),
+          messageAttachments,
+          mode,
+          executionScope
+        );
       }
     },
     [isRunning, taskId, continueConversation]
@@ -1264,16 +1274,28 @@ function MessageList({
     }
   }
 
-  // Collect all tool_result messages in order for matching with tool_use
+  // Collect tool_result messages for matching with tool_use. Prefer stable IDs;
+  // keep index fallback for messages saved before tool IDs were persisted.
   const toolResultMessages: AgentMessage[] = [];
+  const toolResultsById = new Map<string, AgentMessage>();
   mergedMessages.forEach((msg) => {
     if (msg.type === 'tool_result') {
       toolResultMessages.push(msg);
+      if (msg.toolUseId) {
+        toolResultsById.set(msg.toolUseId, msg);
+      }
     }
   });
 
-  // Match tool_use with tool_result by index (they come in pairs)
-  const getToolResult = (toolUseIndex: number): AgentMessage | undefined => {
+  const getToolResult = (
+    toolUse: AgentMessage,
+    toolUseIndex: number
+  ): AgentMessage | undefined => {
+    if (toolUse.id) {
+      return (
+        toolResultsById.get(toolUse.id) || toolResultMessages[toolUseIndex]
+      );
+    }
     return toolResultMessages[toolUseIndex];
   };
 
@@ -1380,8 +1402,7 @@ function MessageList({
         pendingTextMessage = null;
       }
       const group = ensureCurrentGroup();
-      // Find associated tool_result by index
-      const result = getToolResult(toolUseIndex);
+      const result = getToolResult(message, toolUseIndex);
       group.tools.push({ message, globalIndex: toolGlobalIndex++, result });
       toolUseIndex++;
     } else if (message.type === 'tool_result') {
@@ -1824,7 +1845,8 @@ function ErrorMessage({ message }: { message: string }) {
   // Check if this is an internal error (format: __INTERNAL_ERROR__|logPath)
   const isInternalError = message.startsWith('__INTERNAL_ERROR__|');
   if (isInternalError) {
-    const logPath = message.split('|')[1] || '~/.uniins-claw/logs/uniins-claw.log';
+    const logPath =
+      message.split('|')[1] || '~/.uniins-claw/logs/uniins-claw.log';
     const errorMessage = (
       t.common.errors.internalError ||
       'Internal server error. Please check log file: {logPath}'

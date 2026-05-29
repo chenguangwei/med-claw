@@ -13,12 +13,6 @@ const getMcpConfigPath = (): string => {
   return path.join(homeDir, '.uniins-claw', 'mcp.json');
 };
 
-// Claude settings file path: ~/.claude/settings.json
-const getClaudeSettingsPath = (): string => {
-  const homeDir = os.homedir();
-  return path.join(homeDir, '.claude', 'settings.json');
-};
-
 // Ensure directory exists
 const ensureDir = async (filePath: string): Promise<void> => {
   const dir = path.dirname(filePath);
@@ -31,20 +25,36 @@ const ensureDir = async (filePath: string): Promise<void> => {
 
 // MCP Server Config Types
 interface MCPServerStdio {
+  type?: 'stdio';
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  icon?: string;
 }
 
 interface MCPServerHttp {
+  type?: 'http' | 'sse';
   url: string;
   headers?: Record<string, string>;
+  icon?: string;
 }
 
 type MCPServerConfig = MCPServerStdio | MCPServerHttp;
 
 interface MCPConfig {
   mcpServers: Record<string, MCPServerConfig>;
+}
+
+function expandHomePath(inputPath: string): string {
+  if (inputPath === '~') return os.homedir();
+  if (inputPath.startsWith('~/') || inputPath.startsWith('~\\')) {
+    return path.join(os.homedir(), inputPath.slice(2));
+  }
+  return inputPath;
+}
+
+function normalizeComparablePath(inputPath: string): string {
+  return path.resolve(expandHomePath(inputPath)).replace(/[\\/]+$/, '').toLowerCase();
 }
 
 // GET /mcp/config - Read MCP config
@@ -138,9 +148,33 @@ mcp.get('/path', (c) => {
   });
 });
 
-// GET /mcp/all-configs - Read MCP configs from all sources (uniins-claw and claude)
+// GET /mcp/all-configs - Read MCP configs from enabled built-in sources and optional custom path
 mcp.get('/all-configs', async (c) => {
-  const configPaths = getAllMcpConfigPaths();
+  const includeApp = c.req.query('appDirEnabled') !== 'false';
+  const includeUser = c.req.query('userDirEnabled') !== 'false';
+  const customConfigPath = c.req.query('mcpConfigPath');
+  const seen = new Set<string>();
+  const configPaths: { name: string; path: string }[] = [];
+
+  const addPath = (configInfo: { name: string; path: string }) => {
+    const expandedPath = expandHomePath(configInfo.path);
+    const comparable = normalizeComparablePath(expandedPath);
+    if (seen.has(comparable)) return;
+    seen.add(comparable);
+    configPaths.push({ name: configInfo.name, path: expandedPath });
+  };
+
+  for (const configInfo of getAllMcpConfigPaths()) {
+    if (configInfo.name === 'uniins-claw' && includeApp) {
+      addPath(configInfo);
+    } else if (configInfo.name === 'claude' && includeUser) {
+      addPath(configInfo);
+    }
+  }
+
+  if (customConfigPath) {
+    addPath({ name: 'custom', path: customConfigPath });
+  }
   const results: {
     name: string;
     path: string;

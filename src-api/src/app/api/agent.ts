@@ -14,12 +14,23 @@ import { generateTitle, runChat } from '@/shared/services/chat';
 import type { AgentRequest } from '@/shared/types/agent';
 
 const agent = new Hono();
+const SSE_KEEPALIVE_INTERVAL_MS = 10_000;
 
 // Helper to create SSE stream
 function createSSEStream(generator: AsyncGenerator<unknown>) {
   const encoder = new TextEncoder();
   return new ReadableStream({
     async start(controller) {
+      let keepAlive: ReturnType<typeof setInterval> | undefined;
+
+      keepAlive = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(': keepalive\n\n'));
+        } catch {
+          if (keepAlive) clearInterval(keepAlive);
+        }
+      }, SSE_KEEPALIVE_INTERVAL_MS);
+
       try {
         for await (const message of generator) {
           const data = `data: ${JSON.stringify(message)}\n\n`;
@@ -32,6 +43,7 @@ function createSSEStream(generator: AsyncGenerator<unknown>) {
         })}\n\n`;
         controller.enqueue(encoder.encode(errorData));
       } finally {
+        if (keepAlive) clearInterval(keepAlive);
         controller.close();
       }
     },
@@ -116,6 +128,7 @@ agent.post('/execute', async (c) => {
       userDirEnabled: boolean;
       appDirEnabled: boolean;
       mcpConfigPath?: string;
+      includeServers?: string[];
     };
     language?: string;
   }>();

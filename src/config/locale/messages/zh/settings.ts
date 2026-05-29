@@ -244,6 +244,10 @@ export default {
   mcpServerName: '服务器名称',
   mcpServerNamePlaceholder: '例如: My Custom Server',
   mcpTransportType: '传输类型',
+  mcpIcon: '服务图标',
+  mcpIconfontPlaceholder: 'iconfont class，例如 icon-a-jiqiren',
+  mcpIconfontHint:
+    '可选择内置免费 lucide 图标，也可输入已加载 iconfont 的 class。',
   mcpServerUrl: '服务器 URL',
   mcpServerUrlPlaceholder: 'https://mcp.yourserver.com/mcp',
   mcpServerUrlPlaceholderSse: 'https://mcp.yourserver.com/sse',

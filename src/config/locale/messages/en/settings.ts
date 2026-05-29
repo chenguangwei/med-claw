@@ -253,6 +253,10 @@ export default {
   mcpServerName: 'Server Name',
   mcpServerNamePlaceholder: 'e.g., My Custom Server',
   mcpTransportType: 'Transport Type',
+  mcpIcon: 'Service Icon',
+  mcpIconfontPlaceholder: 'iconfont class, e.g. icon-a-bot',
+  mcpIconfontHint:
+    'Choose a built-in free lucide icon, or enter a loaded iconfont class.',
   mcpServerUrl: 'Server URL',
   mcpServerUrlPlaceholder: 'https://mcp.yourserver.com/mcp',
   mcpServerUrlPlaceholderSse: 'https://mcp.yourserver.com/sse',

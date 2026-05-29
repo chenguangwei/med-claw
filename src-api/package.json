@@ -47,6 +47,7 @@
   },
   "pkg": {
     "scripts": "dist/**/*.js",
+    "assets": "resources/skills/**/*",
     "outputPath": "dist"
   }
 }

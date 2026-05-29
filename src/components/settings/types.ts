@@ -43,14 +43,18 @@ export interface DependencyStatus {
 
 // MCP Server Config Types
 export interface MCPServerStdio {
+  type?: 'stdio';
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  icon?: string;
 }
 
 export interface MCPServerHttp {
+  type?: 'http' | 'sse';
   url: string;
   headers?: Record<string, string>;
+  icon?: string;
 }
 
 export type MCPServerConfig = MCPServerStdio | MCPServerHttp;
@@ -67,8 +71,10 @@ export interface MCPServerUI {
   enabled: boolean;
   command?: string;
   args?: string[];
+  env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  icon?: string;
   autoExecute?: boolean;
   source?: 'uniins-claw' | 'claude';
 }

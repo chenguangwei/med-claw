@@ -7,7 +7,10 @@ import {
   updateTask,
   type Task,
 } from '@/shared/db';
-import type { MessageAttachment } from '@/shared/hooks/useAgent';
+import type {
+  AgentExecutionScope,
+  MessageAttachment,
+} from '@/shared/hooks/useAgent';
 import {
   subscribeToBackgroundTasks,
   type BackgroundTask,
@@ -15,13 +18,16 @@ import {
 import { generateSessionId } from '@/shared/lib/session';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import {
   ArrowUpRight,
   BadgeDollarSign,
   Bot,
   CalendarCheck2,
   CalendarDays,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Cog,
   Copy,
   FileText,
@@ -30,14 +36,19 @@ import {
   Loader2,
   Mail,
   MapPin,
+  MonitorSmartphone,
+  Network,
   Phone,
   Plus,
+  Radar,
   ShieldCheck,
+  Sparkles,
   ThumbsDown,
   ThumbsUp,
+  UserPlus,
   UserRound,
-  UsersRound,
   WalletCards,
+  Wifi,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -45,6 +56,8 @@ import remarkGfm from 'remark-gfm';
 import {
   salesDemoScenarios,
   salesFaqs,
+  type SalesAgentPlan,
+  type SalesAgentTrace,
   type SalesDemoTurn,
 } from '@/components/home/salesAssistantDemo';
 import { LeftSidebar, SidebarProvider } from '@/components/layout';
@@ -83,8 +96,25 @@ interface DemoMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  agentTrace?: SalesAgentTrace;
+  plan?: SalesAgentPlan;
+  planStepStatuses?: SalesDemoPlanStepStatus[];
+  planCompleted?: boolean;
+  executionItems?: SalesDemoExecutionItem[];
+  visibleExecutionItemCount?: number;
+  executionExpanded?: boolean;
+  answerStarted?: boolean;
   thinking?: string;
   active?: boolean;
+}
+
+type SalesDemoPlanStepStatus = 'pending' | 'in_progress' | 'completed';
+
+interface SalesDemoExecutionItem {
+  name: string;
+  input?: string;
+  output?: string;
+  summary: string;
 }
 
 interface CollaborationAssistant {
@@ -93,6 +123,17 @@ interface CollaborationAssistant {
   description: string;
   Icon: React.ComponentType<{ className?: string }>;
   tone: 'orange' | 'sky' | 'emerald' | 'violet';
+}
+
+interface CollaborationPeer {
+  id: string;
+  name: string;
+  role: string;
+  device: string;
+  workspace: string;
+  status: 'online' | 'busy';
+  address?: string | null;
+  source?: 'lan' | 'local';
 }
 
 type MockDetail =
@@ -104,6 +145,75 @@ type MockDetail =
       type: 'policy';
       id: string;
     };
+
+interface AssistantSelectionEventDetail {
+  capabilityId?: string | null;
+  skills?: string[];
+  mcps?: string[];
+  mcpServerNames?: string[];
+}
+
+function buildAssistantExecutionScope(
+  detail?: AssistantSelectionEventDetail
+): AgentExecutionScope | undefined {
+  const skillNames = detail?.skills?.filter(Boolean) || [];
+  const mcps = detail?.mcps?.filter(Boolean) || [];
+  const mcpServerNames = detail?.mcpServerNames?.filter(Boolean) || [];
+
+  if (
+    skillNames.length === 0 &&
+    mcps.length === 0 &&
+    mcpServerNames.length === 0
+  ) {
+    return undefined;
+  }
+
+  const instructionParts: string[] = [];
+  if (skillNames.length > 0) {
+    instructionParts.push(`已选 Skills：${skillNames.join('、')}`);
+  }
+  if (mcps.length > 0) {
+    instructionParts.push(`已选 AI/MCP 能力：${mcps.join('、')}`);
+  }
+  if (mcpServerNames.length > 0) {
+    instructionParts.push(
+      `本次仅挂载这些真实 MCP 服务：${mcpServerNames.join('、')}`
+    );
+  }
+
+  return {
+    skillNames,
+    mcpServerNames,
+    instruction: `使用当前助手配置。${instructionParts.join('；')}。`,
+  };
+}
+
+function mergeExecutionScopes(
+  primary?: AgentExecutionScope,
+  secondary?: AgentExecutionScope
+): AgentExecutionScope | undefined {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+
+  const skillNames = Array.from(
+    new Set([...(primary.skillNames || []), ...(secondary.skillNames || [])])
+  );
+  const mcpServerNames = Array.from(
+    new Set([
+      ...(primary.mcpServerNames || []),
+      ...(secondary.mcpServerNames || []),
+    ])
+  );
+  const instruction = [primary.instruction, secondary.instruction]
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    skillNames,
+    mcpServerNames,
+    instruction,
+  };
+}
 
 const collaborationAssistants: CollaborationAssistant[] = [
   {
@@ -141,10 +251,14 @@ const defaultCollaborationAssistantIds: CollaborationAssistant['id'][] = [
   'meeting',
 ];
 
+const initialCollaborationPeers: CollaborationPeer[] = [];
+
+const defaultCollaborationPeerIds: string[] = [];
+
 const collaborationQuickPrompts = [
-  '@销售助手 梳理客户李明对百万医疗的主要异议，给出下一次电话沟通的开场、风险解释、产品对比和成交推进话术。',
-  '@会议助手 根据一次客户方案评审会整理会议纪要，输出议程、决议、责任人、截止时间和会后跟进清单。',
-  '大家一起准备明天客户跟进会：销售助手负责沟通方案，会议助手负责会议流程和纪要模板，办公助手负责会前资料清单。',
+  '把今天客户跟进会拉成协作任务：成员负责客户异议和资料确认，@销售助手 输出下一通电话话术。',
+  '@会议助手 为这个协作群生成会议议程、决议模板、责任人字段和会后跟进清单。',
+  '大家一起准备明天客户方案评审：成员负责确认业务事实，智能助手负责检索、整理和输出可交付材料。',
 ];
 
 const sleep = (duration: number) =>
@@ -156,6 +270,10 @@ function splitStreamChunk(chunk: string) {
 }
 
 function getThinkingSummary(step: DemoStep) {
+  if (step.assistant.agentTrace?.decisions.length) {
+    return step.assistant.agentTrace.decisions.join('\n');
+  }
+
   const prompt = step.prompt;
 
   if (prompt.includes('等待期和免赔额')) {
@@ -254,6 +372,61 @@ function getThinkingSummary(step: DemoStep) {
   return step.assistant.thinking.join('\n');
 }
 
+function getSalesDemoPlan(step: DemoStep): SalesAgentPlan | null {
+  if (step.assistant.plan) return step.assistant.plan;
+
+  if (!step.assistant.agentTrace) return null;
+
+  return {
+    goal: `处理${step.assistant.agentTrace.intent}并输出可执行话术`,
+    steps: [
+      '识别业务意图和必要查询入参',
+      '调用相关工具获取业务信息',
+      '整理为销售人员可直接使用的答复',
+    ],
+    note: '基于当前助手配置和业务规则生成回答',
+  };
+}
+
+function buildSalesDemoExecutionItems(
+  step: DemoStep,
+  plan: SalesAgentPlan | null
+): SalesDemoExecutionItem[] {
+  const trace = step.assistant.agentTrace;
+  if (!trace || !plan) return [];
+
+  const items: SalesDemoExecutionItem[] = [
+    {
+      name: 'TodoWrite',
+      summary: 'Todo list updated',
+      output: plan.steps.map((item) => `- ${item}`).join('\n'),
+    },
+  ];
+
+  for (const tool of trace.tools) {
+    items.push({
+      name: tool.name,
+      input: tool.input,
+      output: tool.output,
+      summary: tool.name.startsWith('mcp__')
+        ? '销售知识库查询完成'
+        : getFirstOutputLine(tool.output),
+    });
+  }
+
+  items.push({
+    name: 'TodoWrite',
+    summary: 'Todo list updated',
+    output: '计划步骤已完成，开始整理最终回答。',
+  });
+
+  return items;
+}
+
+function getFirstOutputLine(output: string) {
+  return output.split('\n').find((line) => line.trim()) || '执行完成';
+}
+
 const salesDemoSteps: DemoStep[] = salesDemoScenarios.flatMap((scenario) => {
   const steps: DemoStep[] = [];
 
@@ -272,8 +445,50 @@ const salesDemoSteps: DemoStep[] = salesDemoScenarios.flatMap((scenario) => {
   return steps;
 });
 
+const customerPolicyDemoPrompt =
+  salesDemoSteps.find((step) => step.prompt.includes('客户李明'))?.prompt ??
+  '客户、保单信息咨询：帮我查一下客户李明的保单状态。';
+
 function normalizeMockPrompt(text: string) {
   return text.replace(/^使用以下能力：销售助手。\s*/u, '').trim();
+}
+
+function getSalesDemoStepIndexForPrompt(prompt: string) {
+  const normalizedPrompt = normalizeMockPrompt(prompt);
+
+  const routeMarkers = [
+    {
+      input: '客户号',
+      step: '客户号 C10086',
+    },
+    {
+      input: '保单号',
+      step: '保单号 P20260521001',
+    },
+    {
+      input: '客户李明',
+      step: '客户李明',
+    },
+    {
+      input: '客户、保单信息咨询',
+      step: '客户李明',
+    },
+    {
+      input: '保单状态',
+      step: '客户李明',
+    },
+  ];
+
+  const matchedRoute = routeMarkers.find((route) =>
+    normalizedPrompt.includes(route.input)
+  );
+  if (!matchedRoute) return null;
+
+  const stepIndex = salesDemoSteps.findIndex((step) =>
+    step.prompt.includes(matchedRoute.step)
+  );
+
+  return stepIndex >= 0 ? stepIndex : null;
 }
 
 function getCollaborationAssistant(assistantId: CollaborationAssistant['id']) {
@@ -309,28 +524,38 @@ function getAssistantToneClasses(tone: CollaborationAssistant['tone']) {
 function buildCollaborationAgentPrompt(
   prompt: string,
   participants: CollaborationAssistant[],
-  targets: CollaborationAssistant[]
+  targets: CollaborationAssistant[],
+  humanMembers: CollaborationPeer[]
 ) {
   const participantLines = participants.map(
     (assistant) => `- @${assistant.name}：${assistant.description}`
+  );
+  const humanMemberLines = humanMembers.map(
+    (member) =>
+      `- ${member.name}（${member.role}，${member.device}，${member.workspace}）`
   );
   const targetNames = targets
     .map((assistant) => `@${assistant.name}`)
     .join('、');
 
   return [
-    '这是一个工作助手协作会话。请作为真实 Agent 执行，不要使用 mock 数据，也不要假装已有外部系统结果；需要工具、文件、检索、代码或系统能力时，按正常 Agent 能力完成。',
+    '这是一个局域网协作会话群。群里有人类成员和智能助手，所有成员都能看到任务、过程、结论和后续待办。',
+    '请作为被拉入群的真实智能助手执行，不要使用模拟数据，也不要假装已有外部系统结果；需要工具、文件、检索、代码或系统能力时，按正常智能体能力完成。',
     '',
-    '参与助手：',
+    '局域网成员：',
+    ...humanMemberLines,
+    '',
+    '智能助手：',
     ...participantLines,
     '',
     `本轮明确响应对象：${targetNames || '按任务需要在参与助手之间分工'}`,
     '',
     '回答要求：',
     '- 如果用户用 @ 指定了某个助手，优先以该助手职责处理。',
-    '- 如果用户要求大家一起协作，请按助手职责分段输出，每段标题使用对应 @助手名。',
+    '- 如果用户要求大家一起协作，请同时给出人类成员分工和智能助手分工。',
+    '- 输出必须包含共享可见的工作进展、责任人、下一步和需要人确认的事项。',
     '- 需要执行任务时直接执行；需要用户补充信息时只问必要问题。',
-    '- 输出要可直接用于工作推进，包含结论、步骤、待办、负责人或风险提示。',
+    '- 输出要可直接用于协作群推进，避免只像单人聊天回复。',
     '',
     '用户输入：',
     prompt,
@@ -392,6 +617,9 @@ function HomeContent() {
     null
   );
   const [salesAssistantActive, setSalesAssistantActive] = useState(false);
+  const [assistantExecutionScope, setAssistantExecutionScope] = useState<
+    AgentExecutionScope | undefined
+  >(undefined);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState<
     string | null
   >(null);
@@ -404,6 +632,11 @@ function HomeContent() {
   const [collaborationAssistantIds, setCollaborationAssistantIds] = useState<
     CollaborationAssistant['id'][]
   >(defaultCollaborationAssistantIds);
+  const [availableCollaborationPeers, setAvailableCollaborationPeers] =
+    useState<CollaborationPeer[]>(initialCollaborationPeers);
+  const [collaborationPeerIds, setCollaborationPeerIds] = useState<string[]>(
+    defaultCollaborationPeerIds
+  );
   const [collaborationRunning, setCollaborationRunning] = useState(false);
   const demoMessagesEndRef = useRef<HTMLDivElement>(null);
   const demoRunRef = useRef(0);
@@ -414,6 +647,11 @@ function HomeContent() {
   const activeCollaborationAssistants = collaborationAssistantIds
     .map(getCollaborationAssistant)
     .filter(Boolean) as CollaborationAssistant[];
+  const activeCollaborationPeers = collaborationPeerIds
+    .map((peerId) =>
+      availableCollaborationPeers.find((peer) => peer.id === peerId)
+    )
+    .filter(Boolean) as CollaborationPeer[];
   const collaborationMentionOptions: MentionOption[] =
     activeCollaborationAssistants.map((assistant) => ({
       id: assistant.id,
@@ -440,6 +678,19 @@ function HomeContent() {
     []
   );
 
+  const toggleDemoExecutionSteps = useCallback((messageId: string) => {
+    setDemoMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              executionExpanded: !message.executionExpanded,
+            }
+          : message
+      )
+    );
+  }, []);
+
   const resetSalesDemo = useCallback(() => {
     demoRunRef.current += 1;
     setPendingPrompt('');
@@ -449,11 +700,55 @@ function HomeContent() {
     setDemoCompleted(false);
   }, []);
 
+  const loadLanCollaborationPeers = useCallback(async () => {
+    if (!isTauri()) {
+      return;
+    }
+
+    try {
+      const peers = await invoke<CollaborationPeer[]>(
+        'discover_lan_collaboration_peers'
+      );
+      if (peers.length === 0) return;
+
+      setAvailableCollaborationPeers(peers);
+      setCollaborationPeerIds((current) => {
+        const validIds = new Set(peers.map((peer) => peer.id));
+        const stillAvailable = current.filter((peerId) => validIds.has(peerId));
+
+        if (stillAvailable.length > 0) {
+          return stillAvailable;
+        }
+
+        return peers.slice(0, Math.min(2, peers.length)).map((peer) => peer.id);
+      });
+    } catch (error) {
+      console.warn('[Home] LAN collaboration discovery failed:', error);
+    }
+  }, []);
+
   const startCollaborationSession = useCallback(() => {
     setCollaborationActive(true);
     setSalesAssistantActive(false);
+    setAssistantExecutionScope(undefined);
     setSelectedCapabilityId(null);
     setActiveCategory(null);
+    resetSalesDemo();
+    setPendingPrompt('');
+    void loadLanCollaborationPeers();
+  }, [loadLanCollaborationPeers, resetSalesDemo]);
+
+  const startNewSession = useCallback(() => {
+    setCollaborationActive(false);
+    setCollaborationRunning(false);
+    setCollaborationAssistantIds(defaultCollaborationAssistantIds);
+    setAvailableCollaborationPeers(initialCollaborationPeers);
+    setCollaborationPeerIds(defaultCollaborationPeerIds);
+    setSalesAssistantActive(false);
+    setAssistantExecutionScope(undefined);
+    setSelectedCapabilityId(null);
+    setActiveCategory(null);
+    setMockDetail(null);
     resetSalesDemo();
     setPendingPrompt('');
   }, [resetSalesDemo]);
@@ -461,6 +756,7 @@ function HomeContent() {
   const handleCapabilitySelect = useCallback(
     (capabilityId: string | null) => {
       setCollaborationActive(false);
+      setAssistantExecutionScope(undefined);
       setSelectedCapabilityId(capabilityId);
       const isSales = capabilityId === 'sales';
       setSalesAssistantActive(isSales);
@@ -475,9 +771,10 @@ function HomeContent() {
 
   useEffect(() => {
     const handleAssistantSelection = (event: Event) => {
-      const detail = (event as CustomEvent<{ capabilityId?: string | null }>)
+      const detail = (event as CustomEvent<AssistantSelectionEventDetail>)
         .detail;
       handleCapabilitySelect(detail?.capabilityId ?? null);
+      setAssistantExecutionScope(buildAssistantExecutionScope(detail));
     };
 
     window.addEventListener(
@@ -488,6 +785,7 @@ function HomeContent() {
       'uniins-claw:collaboration-session-start',
       startCollaborationSession
     );
+    window.addEventListener('uniins-claw:new-session-start', startNewSession);
 
     return () => {
       window.removeEventListener(
@@ -498,8 +796,12 @@ function HomeContent() {
         'uniins-claw:collaboration-session-start',
         startCollaborationSession
       );
+      window.removeEventListener(
+        'uniins-claw:new-session-start',
+        startNewSession
+      );
     };
-  }, [handleCapabilitySelect, startCollaborationSession]);
+  }, [handleCapabilitySelect, startCollaborationSession, startNewSession]);
 
   const handleInputActivate = useCallback(() => {
     if (
@@ -524,28 +826,74 @@ function HomeContent() {
   const streamMockAssistant = useCallback(
     async (step: DemoStep, runId: number) => {
       const assistantMessageId = `assistant-${Date.now()}`;
+      const plan = getSalesDemoPlan(step);
+      const executionItems = buildSalesDemoExecutionItems(step, plan);
       setDemoMessages((current) => [
         ...current,
         {
           id: assistantMessageId,
           role: 'assistant',
           content: '',
+          agentTrace: step.assistant.agentTrace,
+          plan: plan || undefined,
+          planStepStatuses: plan?.steps.map(() => 'pending'),
+          planCompleted: false,
+          executionItems,
+          visibleExecutionItemCount: 0,
+          executionExpanded: true,
+          answerStarted: !plan,
           thinking: '',
           active: true,
         },
       ]);
 
-      await sleep(520);
+      await sleep(260);
 
-      let thinking = '';
-      for (const char of getThinkingSummary(step)) {
-        if (demoRunRef.current !== runId) return false;
-        thinking += char;
-        updateDemoMessage(assistantMessageId, { thinking });
-        await sleep(55);
+      if (plan) {
+        for (let index = 0; index < plan.steps.length; index++) {
+          if (demoRunRef.current !== runId) return false;
+          updateDemoMessage(assistantMessageId, {
+            planStepStatuses: plan.steps.map((_, stepIndex) =>
+              stepIndex < index
+                ? 'completed'
+                : stepIndex === index
+                  ? 'in_progress'
+                  : 'pending'
+            ),
+          });
+          await sleep(360);
+
+          if (demoRunRef.current !== runId) return false;
+          updateDemoMessage(assistantMessageId, {
+            planStepStatuses: plan.steps.map((_, stepIndex) =>
+              stepIndex <= index ? 'completed' : 'pending'
+            ),
+          });
+          await sleep(180);
+        }
+
+        updateDemoMessage(assistantMessageId, { planCompleted: true });
+        await sleep(260);
+
+        for (let index = 0; index < executionItems.length; index++) {
+          if (demoRunRef.current !== runId) return false;
+          updateDemoMessage(assistantMessageId, {
+            visibleExecutionItemCount: index + 1,
+          });
+          await sleep(520);
+        }
+      } else {
+        let thinking = '';
+        for (const char of getThinkingSummary(step)) {
+          if (demoRunRef.current !== runId) return false;
+          thinking += char;
+          updateDemoMessage(assistantMessageId, { thinking });
+          await sleep(28);
+        }
       }
 
-      await sleep(620);
+      await sleep(310);
+      updateDemoMessage(assistantMessageId, { answerStarted: true });
 
       let content = '';
       for (const chunk of step.assistant.chunks) {
@@ -553,7 +901,7 @@ function HomeContent() {
           if (demoRunRef.current !== runId) return false;
           content += piece;
           updateDemoMessage(assistantMessageId, { content });
-          await sleep(piece.includes('\n') ? 220 : 95);
+          await sleep(piece.includes('\n') ? 110 : 48);
         }
       }
 
@@ -567,6 +915,7 @@ function HomeContent() {
     setActiveCategory((prev) => (prev === key ? null : key));
     setCollaborationActive(false);
     setSalesAssistantActive(false);
+    setAssistantExecutionScope(undefined);
     setSelectedCapabilityId(null);
     resetSalesDemo();
     setPendingPrompt('');
@@ -603,6 +952,18 @@ function HomeContent() {
     });
   };
 
+  const handleToggleCollaborationPeer = (peerId: CollaborationPeer['id']) => {
+    setCollaborationPeerIds((current) => {
+      if (current.includes(peerId)) {
+        return current.length > 1
+          ? current.filter((id) => id !== peerId)
+          : current;
+      }
+
+      return [...current, peerId];
+    });
+  };
+
   const handleOpenMockDetail = useCallback((href: string) => {
     const detail = getMockDetailFromHref(href);
     if (!detail) return false;
@@ -612,7 +973,11 @@ function HomeContent() {
   }, []);
 
   const handleCollaborationSubmit = useCallback(
-    async (text: string, attachments?: MessageAttachment[]) => {
+    async (
+      text: string,
+      attachments?: MessageAttachment[],
+      executionScope?: AgentExecutionScope
+    ) => {
       const prompt = text.trim();
       if (!prompt || collaborationRunning) return;
 
@@ -627,7 +992,8 @@ function HomeContent() {
         const agentPrompt = buildCollaborationAgentPrompt(
           prompt,
           activeCollaborationAssistants,
-          targets
+          targets,
+          activeCollaborationPeers
         );
         const sessionId = generateSessionId(prompt);
 
@@ -648,6 +1014,7 @@ function HomeContent() {
             taskIndex: 1,
             attachments,
             mode: 'task' satisfies ChatMode,
+            executionScope,
           },
         });
       } finally {
@@ -657,6 +1024,7 @@ function HomeContent() {
     },
     [
       activeCollaborationAssistants,
+      activeCollaborationPeers,
       collaborationAssistantIds,
       collaborationRunning,
       navigate,
@@ -707,23 +1075,29 @@ function HomeContent() {
   const handleSubmit = async (
     text: string,
     attachments?: MessageAttachment[],
-    mode?: ChatMode
+    mode?: ChatMode,
+    inputExecutionScope?: AgentExecutionScope
   ) => {
     if (!text.trim() && (!attachments || attachments.length === 0)) return;
 
     const prompt = text.trim();
 
     if (collaborationActive) {
-      await handleCollaborationSubmit(prompt, attachments);
+      await handleCollaborationSubmit(prompt, attachments, inputExecutionScope);
       return;
     }
 
     if (salesAssistantActive) {
-      if (!nextDemoStep || demoRunning) return;
+      if (demoRunning) return;
 
       const runId = demoRunRef.current + 1;
       demoRunRef.current = runId;
       const displayPrompt = normalizeMockPrompt(prompt);
+      const routedStepIndex =
+        getSalesDemoStepIndexForPrompt(displayPrompt) ?? demoStepIndex;
+      const routedStep = salesDemoSteps[routedStepIndex];
+
+      if (!routedStep) return;
 
       setDemoRunning(true);
       setDemoMessages((current) => [
@@ -731,20 +1105,16 @@ function HomeContent() {
         {
           id: `user-${Date.now()}`,
           role: 'user',
-          content: displayPrompt || nextDemoStep.prompt,
+          content: displayPrompt || routedStep.prompt,
         },
       ]);
 
-      const completed = await streamMockAssistant(nextDemoStep, runId);
+      const completed = await streamMockAssistant(routedStep, runId);
       if (!completed) return;
 
-      setDemoStepIndex((current) => {
-        const nextIndex = current + 1;
-        if (nextIndex >= salesDemoSteps.length) {
-          setDemoCompleted(true);
-        }
-        return nextIndex;
-      });
+      const nextIndex = routedStepIndex + 1;
+      setDemoStepIndex(nextIndex);
+      setDemoCompleted(nextIndex >= salesDemoSteps.length);
       setPendingPrompt('');
       setDemoRunning(false);
       return;
@@ -773,16 +1143,20 @@ function HomeContent() {
         taskIndex: 1,
         attachments,
         mode,
+        executionScope: mergeExecutionScopes(
+          assistantExecutionScope,
+          inputExecutionScope
+        ),
       },
     });
   };
 
   const categories = t.home.examplePrompts.categories;
   const activeCategoryData = activeCategory ? categories[activeCategory] : null;
-  const hasActiveConversation = hasDemoConversation;
+  const hasActiveConversation = hasDemoConversation || collaborationActive;
   const inputPlaceholder = useMemo(() => {
     if (collaborationActive) {
-      return '输入 @销售助手、@会议助手，或直接让大家协作处理';
+      return '在协作群里安排任务，可 @销售助手、@会议助手，也可指定成员负责人';
     }
 
     if (salesAssistantActive && demoCompleted) {
@@ -801,6 +1175,36 @@ function HomeContent() {
     salesAssistantActive,
     t.home.inputPlaceholder,
   ]);
+
+  const chatInput = (
+    <ChatInput
+      variant="home"
+      placeholder={inputPlaceholder}
+      isRunning={demoRunning || collaborationRunning}
+      onSubmit={handleSubmit}
+      className="w-full"
+      autoFocus={!salesAssistantActive}
+      externalValue={pendingPrompt}
+      onExternalValueConsumed={handlePendingConsumed}
+      onCapabilitySelect={handleCapabilitySelect}
+      selectedCapabilityId={selectedCapabilityId}
+      onInputActivate={handleInputActivate}
+      preserveCapabilitiesOnSubmit={salesAssistantActive}
+      showCapabilities={!collaborationActive}
+      mentionOptions={
+        collaborationActive ? collaborationMentionOptions : undefined
+      }
+      categoryTag={
+        activeCategory && activeCategoryData
+          ? {
+              icon: categoryIcons[activeCategory],
+              label: activeCategoryData.label,
+              onClose: handleCloseCategory,
+            }
+          : undefined
+      }
+    />
+  );
 
   return (
     <div className="bg-sidebar flex h-screen overflow-hidden">
@@ -825,9 +1229,11 @@ function HomeContent() {
           <div
             className={cn(
               'flex w-full flex-col items-center gap-6',
-              hasActiveConversation
-                ? 'mx-auto min-h-0 max-w-5xl flex-1'
-                : 'max-w-2xl'
+              collaborationActive
+                ? 'mx-auto min-h-0 max-w-6xl flex-1'
+                : hasActiveConversation
+                  ? 'mx-auto min-h-0 max-w-5xl flex-1'
+                  : 'max-w-2xl'
             )}
           >
             {/* Title */}
@@ -837,101 +1243,85 @@ function HomeContent() {
               </h1>
             )}
 
-            {salesAssistantActive && !hasDemoConversation && (
-              <SalesAssistantFaqPanel completed={demoCompleted} />
-            )}
-
-            {collaborationActive && (
+            {collaborationActive ? (
               <CollaborationStartPanel
                 activeAssistants={activeCollaborationAssistants}
+                activePeers={activeCollaborationPeers}
+                availablePeers={availableCollaborationPeers}
                 assistantIds={collaborationAssistantIds}
+                peerIds={collaborationPeerIds}
                 onToggleAssistant={handleToggleCollaborationAssistant}
+                onTogglePeer={handleToggleCollaborationPeer}
                 onPromptClick={handleCollaborationQuickPrompt}
-              />
-            )}
-
-            {hasDemoConversation && (
-              <div className="scrollbar-soft min-h-0 w-full flex-1 overflow-y-auto pr-2">
-                <div className="space-y-5 py-2">
-                  {demoMessages.map((message) => (
-                    <SalesDemoMessageBubble
-                      key={message.id}
-                      message={message}
-                      onOpenMockDetail={handleOpenMockDetail}
-                    />
-                  ))}
-                  <div ref={demoMessagesEndRef} />
-                </div>
-              </div>
-            )}
-
-            {/* Input Box */}
-            <ChatInput
-              variant="home"
-              placeholder={inputPlaceholder}
-              isRunning={demoRunning || collaborationRunning}
-              onSubmit={handleSubmit}
-              className="w-full"
-              autoFocus={!salesAssistantActive}
-              externalValue={pendingPrompt}
-              onExternalValueConsumed={handlePendingConsumed}
-              onCapabilitySelect={handleCapabilitySelect}
-              selectedCapabilityId={selectedCapabilityId}
-              onInputActivate={handleInputActivate}
-              preserveCapabilitiesOnSubmit={salesAssistantActive}
-              showCapabilities={!collaborationActive}
-              mentionOptions={
-                collaborationActive ? collaborationMentionOptions : undefined
-              }
-              categoryTag={
-                activeCategory && activeCategoryData
-                  ? {
-                      icon: categoryIcons[activeCategory],
-                      label: activeCategoryData.label,
-                      onClose: handleCloseCategory,
-                    }
-                  : undefined
-              }
-            />
-
-            {/* Category Buttons / Prompt List */}
-            {salesAssistantActive ||
-            collaborationActive ? null : activeCategory &&
-              activeCategoryData ? (
-              /* Expanded: show prompts for selected category */
-              <div className="w-full">
-                <div className="border-border divide-border divide-y rounded-xl border">
-                  {activeCategoryData.prompts.map((prompt, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      onClick={() => handlePromptClick(prompt)}
-                      className="text-foreground hover:bg-accent group flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left text-sm transition-colors first:rounded-t-xl last:rounded-b-xl"
-                    >
-                      <span className="truncate">{prompt}</span>
-                      <ArrowUpRight className="text-muted-foreground group-hover:text-foreground size-4 shrink-0 transition-colors" />
-                    </button>
-                  ))}
-                </div>
-              </div>
+              >
+                {chatInput}
+              </CollaborationStartPanel>
             ) : (
-              /* Default: show category buttons */
-              <div className="flex flex-wrap items-center justify-center gap-3">
-                {categoryKeys.map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => handleCategoryClick(key)}
-                    className={cn(
-                      'border-border bg-background text-muted-foreground flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors',
-                      'hover:bg-accent hover:text-foreground'
-                    )}
-                  >
-                    {categoryIcons[key]}
-                    <span>{categories[key].label}</span>
-                  </button>
-                ))}
-              </div>
+              <>
+                {salesAssistantActive && !hasDemoConversation && (
+                  <SalesAssistantFaqPanel
+                    completed={demoCompleted}
+                    onPromptClick={handlePromptClick}
+                  />
+                )}
+
+                {hasDemoConversation && (
+                  <div className="scrollbar-soft min-h-0 w-full flex-1 overflow-y-auto pr-2">
+                    <div className="space-y-5 py-2">
+                      {demoMessages.map((message) => (
+                        <SalesDemoMessageBubble
+                          key={message.id}
+                          message={message}
+                          onOpenMockDetail={handleOpenMockDetail}
+                          onToggleExecutionSteps={toggleDemoExecutionSteps}
+                        />
+                      ))}
+                      <div ref={demoMessagesEndRef} />
+                    </div>
+                  </div>
+                )}
+
+                {chatInput}
+
+                {/* Category Buttons / Prompt List */}
+                {salesAssistantActive ? null : activeCategory &&
+                  activeCategoryData ? (
+                  /* Expanded: show prompts for selected category */
+                  <div className="w-full">
+                    <div className="border-border divide-border divide-y rounded-xl border">
+                      {activeCategoryData.prompts.map((prompt, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => handlePromptClick(prompt)}
+                          className="text-foreground hover:bg-accent group flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left text-sm transition-colors first:rounded-t-xl last:rounded-b-xl"
+                        >
+                          <span className="truncate">{prompt}</span>
+                          <ArrowUpRight className="text-muted-foreground group-hover:text-foreground size-4 shrink-0 transition-colors" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  /* Default: show category buttons */
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    {categoryKeys.map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleCategoryClick(key)}
+                        className={cn(
+                          'border-border bg-background text-muted-foreground flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors',
+                          'hover:bg-accent hover:text-foreground'
+                        )}
+                      >
+                        {categoryIcons[key]}
+                        <span>{categories[key].label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -949,115 +1339,239 @@ function HomeContent() {
 
 function CollaborationStartPanel({
   activeAssistants,
+  activePeers,
+  availablePeers,
   assistantIds,
+  peerIds,
   onToggleAssistant,
+  onTogglePeer,
   onPromptClick,
+  children,
 }: {
   activeAssistants: CollaborationAssistant[];
+  activePeers: CollaborationPeer[];
+  availablePeers: CollaborationPeer[];
   assistantIds: CollaborationAssistant['id'][];
+  peerIds: CollaborationPeer['id'][];
   onToggleAssistant: (assistantId: CollaborationAssistant['id']) => void;
+  onTogglePeer: (peerId: CollaborationPeer['id']) => void;
   onPromptClick: (prompt: string) => void;
+  children: React.ReactNode;
 }) {
+  const totalMembers = activePeers.length + activeAssistants.length;
+  const hasDiscoveredPeers = availablePeers.length > 0;
+
   return (
-    <div className="w-full space-y-4">
-      <div className="border-border/70 bg-card/80 rounded-xl border p-4 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="grid min-h-0 w-full flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <section className="border-border/70 bg-card flex min-h-[560px] min-w-0 flex-col overflow-hidden rounded-xl border shadow-sm">
+        <div className="border-border/70 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-xl">
-              <UsersRound className="size-5" />
+            <span className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg">
+              <Wifi className="size-4" />
             </span>
             <div className="min-w-0">
-              <h2 className="text-foreground text-lg font-semibold">
+              <h2 className="text-foreground truncate text-base font-semibold">
                 协作会话
               </h2>
-              <p className="text-muted-foreground mt-1 text-sm">
-                已拉入 {activeAssistants.length} 个工作助手
+              <p className="text-muted-foreground mt-0.5 truncate text-xs">
+                局域网发现已接入 · 已拉入 {activePeers.length} 人、
+                {activeAssistants.length} 个智能助手
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {activeAssistants.map((assistant) => (
-              <AssistantPill key={assistant.id} assistant={assistant} />
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="border-border bg-background text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
+              <Radar className="size-3.5" />
+              {hasDiscoveredPeers
+                ? `发现 ${availablePeers.length} 人`
+                : '等待同网成员'}
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
+              可开始
+            </span>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 md:grid-cols-2">
-          {collaborationAssistants.map((assistant) => {
-            const active = assistantIds.includes(assistant.id);
-            const Icon = assistant.Icon;
+        <div className="flex min-h-0 flex-1 flex-col justify-between p-4">
+          <div className="bg-muted/20 border-border/70 flex min-h-[280px] flex-1 flex-col justify-between rounded-lg border p-4">
+            <div className="space-y-3">
+              <div className="flex items-start gap-3">
+                <span className="bg-background border-border flex size-8 shrink-0 items-center justify-center rounded-lg border">
+                  <Network className="text-primary size-4" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-foreground text-sm font-semibold">
+                    群内任务会在这里沉淀为共享上下文
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-sm leading-6">
+                    发送后，智能助手会按群成员和助手职责拆解任务，输出负责人、进展、待确认事项和下一步。
+                  </p>
+                </div>
+              </div>
+              <div className="border-border bg-background rounded-lg border px-3 py-2 text-sm">
+                <span className="text-muted-foreground">当前群：</span>
+                <span className="text-foreground font-medium">
+                  {totalMembers} 位成员共享可见
+                </span>
+              </div>
+            </div>
 
-            return (
-              <button
-                key={assistant.id}
-                type="button"
-                onClick={() => onToggleAssistant(assistant.id)}
-                className={cn(
-                  'border-border bg-background hover:border-primary/35 hover:bg-primary/5 flex min-h-20 items-start gap-3 rounded-xl border p-3 text-left transition-colors',
-                  active && 'border-primary/30 bg-primary/5'
-                )}
-              >
-                <span
+            <div className="mt-4 grid gap-2 md:grid-cols-3">
+              {collaborationQuickPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => onPromptClick(prompt)}
+                  className="border-border bg-background hover:border-primary/35 hover:bg-primary/5 flex min-h-20 cursor-pointer flex-col justify-between rounded-lg border p-3 text-left text-xs leading-5 transition-colors"
+                >
+                  <span className="line-clamp-3">{prompt}</span>
+                  <ArrowUpRight className="text-muted-foreground mt-2 size-3.5 shrink-0" />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4">{children}</div>
+        </div>
+      </section>
+
+      <aside className="flex min-h-0 flex-col gap-4">
+        <section className="border-border/70 bg-card min-h-0 rounded-xl border p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-foreground text-sm font-semibold">
+                同网成员
+              </h3>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                真实桌面端发现结果
+              </p>
+            </div>
+            <MonitorSmartphone className="text-muted-foreground size-4" />
+          </div>
+          <div className="max-h-52 space-y-1.5 overflow-y-auto">
+            {hasDiscoveredPeers ? (
+              availablePeers.map((peer) => {
+                const active = peerIds.includes(peer.id);
+
+                return (
+                  <button
+                    key={peer.id}
+                    type="button"
+                    onClick={() => onTogglePeer(peer.id)}
+                    className={cn(
+                      'border-border bg-background hover:border-primary/35 hover:bg-primary/5 flex w-full cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors',
+                      active && 'border-primary/35 bg-primary/5'
+                    )}
+                  >
+                    <PeerAvatar name={peer.name} active={active} />
+                    <span className="min-w-0 flex-1">
+                      <span className="text-foreground block truncate text-sm font-semibold">
+                        {peer.name}
+                      </span>
+                      <span className="text-muted-foreground block truncate text-xs">
+                        {peer.role}
+                      </span>
+                    </span>
+                    {active ? (
+                      <CheckCircle2 className="text-primary size-4 shrink-0" />
+                    ) : (
+                      <UserPlus className="text-muted-foreground size-4 shrink-0" />
+                    )}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="border-border bg-background rounded-lg border px-3 py-4 text-sm">
+                <p className="text-foreground font-medium">暂未发现同网成员</p>
+                <p className="text-muted-foreground mt-1 text-xs leading-5">
+                  浏览器预览不伪造人员。桌面端会通过局域网发现接口显示真实在线成员。
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="border-border/70 bg-card rounded-xl border p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-foreground text-sm font-semibold">
+                智能助手
+              </h3>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                选择要拉入群的能力
+              </p>
+            </div>
+            <Sparkles className="text-muted-foreground size-4" />
+          </div>
+          <div className="space-y-1.5">
+            {collaborationAssistants.map((assistant) => {
+              const active = assistantIds.includes(assistant.id);
+              const Icon = assistant.Icon;
+
+              return (
+                <button
+                  key={assistant.id}
+                  type="button"
+                  onClick={() => onToggleAssistant(assistant.id)}
                   className={cn(
-                    'flex size-9 shrink-0 items-center justify-center rounded-lg border',
-                    getAssistantToneClasses(assistant.tone)
+                    'border-border bg-background hover:border-primary/35 hover:bg-primary/5 flex min-h-14 cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors',
+                    active && 'border-primary/35 bg-primary/5'
                   )}
                 >
-                  <Icon className="size-4" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="text-foreground block text-sm font-semibold">
-                    {assistant.name}
+                  <span
+                    className={cn(
+                      'flex size-8 shrink-0 items-center justify-center rounded-lg border',
+                      getAssistantToneClasses(assistant.tone)
+                    )}
+                  >
+                    <Icon className="size-3.5" />
                   </span>
-                  <span className="text-muted-foreground mt-1 block text-xs leading-5">
-                    {assistant.description}
+                  <span className="min-w-0 flex-1">
+                    <span className="text-foreground block truncate text-sm font-semibold">
+                      {assistant.name}
+                    </span>
+                    <span className="text-muted-foreground block truncate text-xs">
+                      {assistant.description}
+                    </span>
                   </span>
-                </span>
-                {active ? (
-                  <CheckCircle2 className="text-primary mt-1 size-4 shrink-0" />
-                ) : (
-                  <Plus className="text-muted-foreground mt-1 size-4 shrink-0" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="border-border divide-border divide-y rounded-xl border">
-        {collaborationQuickPrompts.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            onClick={() => onPromptClick(prompt)}
-            className="text-foreground hover:bg-accent group flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left text-sm transition-colors first:rounded-t-xl last:rounded-b-xl"
-          >
-            <span className="min-w-0 truncate">{prompt}</span>
-            <ArrowUpRight className="text-muted-foreground group-hover:text-foreground size-4 shrink-0 transition-colors" />
-          </button>
-        ))}
-      </div>
+                  {active ? (
+                    <CheckCircle2 className="text-primary size-4 shrink-0" />
+                  ) : (
+                    <Plus className="text-muted-foreground size-4 shrink-0" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      </aside>
     </div>
   );
 }
 
-function AssistantPill({ assistant }: { assistant: CollaborationAssistant }) {
-  const Icon = assistant.Icon;
-
+function PeerAvatar({ name, active }: { name: string; active?: boolean }) {
   return (
     <span
       className={cn(
-        'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold',
-        getAssistantToneClasses(assistant.tone)
+        'flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold',
+        active
+          ? 'bg-blue-600 text-white'
+          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
       )}
     >
-      <Icon className="size-3.5" />
-      {assistant.name}
+      {name.slice(0, 1)}
     </span>
   );
 }
 
-function SalesAssistantFaqPanel({ completed }: { completed: boolean }) {
+function SalesAssistantFaqPanel({
+  completed,
+  onPromptClick,
+}: {
+  completed: boolean;
+  onPromptClick: (prompt: string) => void;
+}) {
   return (
     <div className="border-border/70 bg-card/80 w-full rounded-xl border p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -1083,6 +1597,21 @@ function SalesAssistantFaqPanel({ completed }: { completed: boolean }) {
         )}
       </div>
 
+      <button
+        type="button"
+        onClick={() => onPromptClick(customerPolicyDemoPrompt)}
+        className="border-border/70 bg-background hover:bg-accent text-foreground mb-3 flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors"
+      >
+        <span className="min-w-0">
+          <span className="block font-semibold">模拟客户/保单查询</span>
+          <span className="text-muted-foreground mt-0.5 block truncate text-xs">
+            自动填入客户李明保单状态咨询，发送后展示
+            Agent、Skill、工具和知识库流程
+          </span>
+        </span>
+        <ArrowUpRight className="text-muted-foreground size-4 shrink-0" />
+      </button>
+
       <div className="grid gap-2 md:grid-cols-2">
         {salesFaqs.map((faq) => (
           <div
@@ -1105,11 +1634,18 @@ function SalesAssistantFaqPanel({ completed }: { completed: boolean }) {
 function SalesDemoMessageBubble({
   message,
   onOpenMockDetail,
+  onToggleExecutionSteps,
 }: {
   message: DemoMessage;
   onOpenMockDetail: (href: string) => boolean;
+  onToggleExecutionSteps: (messageId: string) => void;
 }) {
   const isUser = message.role === 'user';
+  const shouldRenderAnswer =
+    isUser ||
+    message.answerStarted ||
+    !!message.content ||
+    (!message.plan && message.active);
 
   return (
     <div className={cn('flex gap-3', isUser ? 'justify-end' : 'justify-start')}>
@@ -1133,7 +1669,27 @@ function SalesDemoMessageBubble({
               : 'border-border/80 bg-card text-card-foreground border'
           )}
         >
-          {!isUser && message.thinking && (
+          {!isUser && message.plan && (
+            <SalesDemoPlanCard
+              plan={message.plan}
+              stepStatuses={message.planStepStatuses || []}
+              completed={!!message.planCompleted}
+            />
+          )}
+
+          {!isUser &&
+            message.executionItems &&
+            message.executionItems.length > 0 &&
+            (message.visibleExecutionItemCount || 0) > 0 && (
+              <SalesDemoExecutionSteps
+                items={message.executionItems}
+                visibleCount={message.visibleExecutionItemCount || 0}
+                expanded={message.executionExpanded !== false}
+                onToggle={() => onToggleExecutionSteps(message.id)}
+              />
+            )}
+
+          {!isUser && !message.agentTrace && message.thinking && (
             <div className="mb-3 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800">
               <div className="mb-1 font-semibold">思考过程</div>
               <p className="whitespace-pre-line">{message.thinking}</p>
@@ -1142,7 +1698,7 @@ function SalesDemoMessageBubble({
 
           {isUser ? (
             <p>{message.content}</p>
-          ) : (
+          ) : shouldRenderAnswer ? (
             <div className="prose prose-sm dark:prose-invert max-w-none">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -1173,7 +1729,7 @@ function SalesDemoMessageBubble({
                 </span>
               )}
             </div>
-          )}
+          ) : null}
         </div>
 
         {!isUser && !message.active && (
@@ -1198,6 +1754,183 @@ function SalesDemoMessageBubble({
       )}
     </div>
   );
+}
+
+function SalesDemoPlanCard({
+  plan,
+  stepStatuses,
+  completed,
+}: {
+  plan: SalesAgentPlan;
+  stepStatuses: SalesDemoPlanStepStatus[];
+  completed: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        'mb-3 space-y-4 rounded-xl border p-4',
+        completed
+          ? 'border-emerald-500/30 bg-emerald-50/30'
+          : 'border-orange-300/35 bg-orange-50/40'
+      )}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-foreground flex items-center gap-2 text-sm font-semibold">
+          {completed ? (
+            <Check className="size-4 text-emerald-500" />
+          ) : (
+            <Loader2 className="text-primary size-4 animate-spin" />
+          )}
+          执行计划
+          <span
+            className={cn(
+              'rounded-full px-2 py-0.5 text-xs',
+              completed
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-orange-100 text-orange-700'
+            )}
+          >
+            {completed ? '已完成' : '执行中'}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <p className="text-muted-foreground text-xs">目标</p>
+        <p className="text-foreground text-sm font-medium">{plan.goal}</p>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-muted-foreground text-xs">
+          步骤（{plan.steps.length}）
+        </p>
+        <div className="space-y-2">
+          {plan.steps.map((step, index) => {
+            const status = stepStatuses[index] || 'pending';
+
+            return (
+              <div key={step} className="flex items-start gap-2.5">
+                <div
+                  className={cn(
+                    'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border text-xs font-medium transition-colors',
+                    status === 'completed'
+                      ? 'border-orange-500 bg-orange-500 text-white'
+                      : status === 'in_progress'
+                        ? 'border-orange-500 bg-orange-50 text-orange-600'
+                        : 'border-muted-foreground/30 bg-background text-muted-foreground'
+                  )}
+                >
+                  {status === 'completed' ? (
+                    <Check className="size-3" />
+                  ) : status === 'in_progress' ? (
+                    <span className="size-1.5 animate-pulse rounded-full bg-orange-500" />
+                  ) : (
+                    index + 1
+                  )}
+                </div>
+                <span
+                  className={cn(
+                    'min-w-0 flex-1 text-sm leading-snug',
+                    status === 'pending'
+                      ? 'text-muted-foreground'
+                      : 'text-foreground font-medium'
+                  )}
+                >
+                  {step}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-muted-foreground text-xs">备注</p>
+        <p className="text-muted-foreground mt-1 text-sm">{plan.note}</p>
+      </div>
+    </div>
+  );
+}
+
+function SalesDemoExecutionSteps({
+  items,
+  visibleCount,
+  expanded,
+  onToggle,
+}: {
+  items: SalesDemoExecutionItem[];
+  visibleCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const visibleItems = items.slice(0, visibleCount);
+  if (visibleItems.length === 0) return null;
+
+  return (
+    <div className="border-border/40 bg-accent/20 mb-3 min-w-0 overflow-hidden rounded-xl border">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="text-muted-foreground hover:text-foreground hover:bg-accent/30 flex w-full cursor-pointer items-center gap-2 px-4 py-2.5 text-sm transition-colors"
+      >
+        <ChevronDown
+          className={cn(
+            'size-4 shrink-0 transition-transform',
+            !expanded && '-rotate-90'
+          )}
+        />
+        <span className="flex-1 text-left">
+          {expanded ? '隐藏步骤' : `显示步骤（${visibleItems.length}）`}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="px-2 pb-2">
+          <div className="space-y-1">
+            {visibleItems.map((item, index) => (
+              <SalesDemoExecutionItemRow
+                key={`${item.name}-${index}`}
+                item={item}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SalesDemoExecutionItemRow({ item }: { item: SalesDemoExecutionItem }) {
+  return (
+    <div className="-mx-1 rounded-md px-1 py-1.5 font-mono text-[13px]">
+      <div className="flex items-start gap-2">
+        <span className="mt-1.5 size-2 shrink-0 rounded-full bg-emerald-500" />
+        <div className="min-w-0 flex-1">
+          <p className="leading-relaxed">
+            <span className="text-foreground font-semibold">
+              {getTraceToolLabel(item.name)}
+            </span>
+          </p>
+        </div>
+      </div>
+      <div className="mt-0.5 ml-1 flex items-start gap-2">
+        <span className="text-muted-foreground/40 leading-none">└</span>
+        <span className="text-muted-foreground">{item.summary}</span>
+      </div>
+    </div>
+  );
+}
+
+function getTraceToolLabel(toolName: string) {
+  if (!toolName.startsWith('mcp__')) return toolName;
+
+  const [, serverName = '', tool = ''] = toolName.split('__');
+  const serverLabel =
+    serverName === 'sales_knowledge_base'
+      ? '销售知识库 MCP'
+      : `${serverName || 'MCP'} MCP`;
+
+  return tool ? `${serverLabel} / ${tool}` : serverLabel;
 }
 
 function MockDetailDialog({

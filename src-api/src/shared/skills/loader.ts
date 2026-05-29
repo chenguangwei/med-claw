@@ -12,7 +12,6 @@ import { existsSync } from 'fs';
 import fs from 'fs/promises';
 import { homedir } from 'os';
 import { basename, dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import {
   getSkill,
   initBundledSkills,
@@ -357,15 +356,30 @@ export function findSkill(
  * Get the path to bundled built-in skills in the project resources
  */
 function getBuiltinSkillsSourceDir(): string {
-  // Resolve relative to this file: src/shared/skills/loader.ts -> resources/skills/
-  const thisDir = dirname(fileURLToPath(import.meta.url));
-  // In dev: src-api/src/shared/skills/ -> src-api/resources/skills/
-  // In prod: dist/shared/skills/ -> resources/skills/
-  const devPath = join(thisDir, '..', '..', '..', 'resources', 'skills');
-  if (existsSync(devPath)) return devPath;
-  const prodPath = join(thisDir, '..', '..', 'resources', 'skills');
-  if (existsSync(prodPath)) return prodPath;
-  return devPath; // fallback
+  const candidates: string[] = [];
+  const runtimeDir =
+    typeof __dirname === 'string' ? __dirname : dirname(process.execPath);
+  const execDir = dirname(process.execPath);
+
+  candidates.push(
+    // tsx/dev or tsc output when launched from src-api
+    join(process.cwd(), 'resources', 'skills'),
+    // repository-root launch, including one-off production bundle checks
+    join(process.cwd(), 'src-api', 'resources', 'skills'),
+    // pkg snapshot / bundled CJS paths
+    join(runtimeDir, '..', 'resources', 'skills'),
+    join(runtimeDir, '..', '..', 'resources', 'skills'),
+    join(runtimeDir, '..', '..', '..', 'resources', 'skills'),
+    // external resources next to the packaged sidecar, if present
+    join(execDir, 'resources', 'skills'),
+    join(execDir, '..', 'resources', 'skills')
+  );
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return candidates[0];
 }
 
 /**

@@ -5,10 +5,13 @@
  * Supports text input, file attachments, image paste, and keyboard shortcuts.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE_URL } from '@/config';
 import { getSettings } from '@/shared/db/settings';
-import type { MessageAttachment } from '@/shared/hooks/useAgent';
+import type {
+  AgentExecutionScope,
+  MessageAttachment,
+} from '@/shared/hooks/useAgent';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import {
@@ -17,18 +20,25 @@ import {
   Bot,
   BriefcaseBusiness,
   CalendarCheck2,
+  CircleCheck,
   Cpu,
   FileCheck2,
   FileText,
   MessageCircle,
   Paperclip,
   Plus,
+  Search,
   Send,
   Sparkles,
   Square,
   X,
 } from 'lucide-react';
 
+import {
+  loadConfiguredMcpCapabilityExtensions,
+  officialCapabilityExtensions,
+  type CapabilityExtension,
+} from '@/components/shared/capability-extensions';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,6 +47,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
@@ -80,6 +93,11 @@ export interface MentionOption {
   icon?: React.ComponentType<{ className?: string }>;
 }
 
+interface MentionHighlightSegment {
+  text: string;
+  isMention: boolean;
+}
+
 const capabilityOptions: CapabilityOption[] = [
   {
     id: 'sales',
@@ -116,7 +134,8 @@ export interface ChatInputProps {
   onSubmit: (
     text: string,
     attachments?: MessageAttachment[],
-    mode?: ChatMode
+    mode?: ChatMode,
+    executionScope?: AgentExecutionScope
   ) => Promise<void>;
   /** Callback when stop button is clicked */
   onStop?: () => void;
@@ -183,6 +202,56 @@ function stripYamlQuotes(value: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getMentionHighlightSegments(
+  text: string,
+  mentionOptions: MentionOption[]
+): MentionHighlightSegment[] {
+  const labels = Array.from(
+    new Set(
+      mentionOptions
+        .map((option) => option.label.trim())
+        .filter((label) => label.length > 0)
+    )
+  ).sort((a, b) => b.length - a.length);
+
+  if (!text || labels.length === 0) {
+    return text ? [{ text, isMention: false }] : [];
+  }
+
+  const pattern = new RegExp(
+    `@(${labels.map(escapeRegExp).join('|')})(?=$|[\\s，。,.!?！？、:：；;])`,
+    'gu'
+  );
+  const segments: MentionHighlightSegment[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+
+    if (index > lastIndex) {
+      segments.push({
+        text: text.slice(lastIndex, index),
+        isMention: false,
+      });
+    }
+
+    segments.push({
+      text: match[0],
+      isMention: true,
+    });
+    lastIndex = index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({
+      text: text.slice(lastIndex),
+      isMention: false,
+    });
+  }
+
+  return segments;
 }
 
 function readTopLevelYamlValue(
@@ -276,8 +345,17 @@ export function ChatInput({
   const [selectedCapabilityIds, setSelectedCapabilityIds] = useState<string[]>(
     []
   );
+  const [capabilityExtensions, setCapabilityExtensions] = useState<
+    CapabilityExtension[]
+  >(officialCapabilityExtensions);
+  const [capabilityExtensionsLoading, setCapabilityExtensionsLoading] =
+    useState(false);
+  const [selectedCapabilityExtensionIds, setSelectedCapabilityExtensionIds] =
+    useState<string[]>([]);
+  const [capabilityExtensionQuery, setCapabilityExtensionQuery] = useState('');
   const [highlightedSkillIndex, setHighlightedSkillIndex] = useState(0);
   const [highlightedMentionIndex, setHighlightedMentionIndex] = useState(0);
+  const [textareaScrollTop, setTextareaScrollTop] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -318,8 +396,29 @@ export function ChatInput({
   const selectedCapabilities = capabilityOptions.filter((capability) =>
     selectedCapabilityIds.includes(capability.id)
   );
+  const selectedCapabilityExtensions = capabilityExtensions.filter(
+    (capability) => selectedCapabilityExtensionIds.includes(capability.id)
+  );
+  const filteredCapabilityExtensions = capabilityExtensions.filter(
+    (capability) => {
+      const query = capabilityExtensionQuery.trim().toLowerCase();
+      if (!query) return true;
+      return (
+        capability.name.toLowerCase().includes(query) ||
+        capability.description.toLowerCase().includes(query) ||
+        capability.tags.some((tag) => tag.toLowerCase().includes(query))
+      );
+    }
+  );
   const visibleCapabilities =
     selectedCapabilities.length > 0 ? selectedCapabilities : capabilityOptions;
+  const mentionHighlightSegments = useMemo(
+    () => getMentionHighlightSegments(value, mentionOptions),
+    [mentionOptions, value]
+  );
+  const hasMentionHighlights = mentionHighlightSegments.some(
+    (segment) => segment.isMention
+  );
 
   // Sync external value into the input
   useEffect(() => {
@@ -472,6 +571,26 @@ export function ChatInput({
       setSkillsLoading(false);
     }
   }, [skillsLoading]);
+
+  const loadCapabilityExtensions = useCallback(async () => {
+    if (capabilityExtensionsLoading) return;
+
+    setCapabilityExtensionsLoading(true);
+    try {
+      const settings = getSettings();
+      const configuredMcpExtensions =
+        await loadConfiguredMcpCapabilityExtensions(settings);
+      setCapabilityExtensions([
+        ...configuredMcpExtensions,
+        ...officialCapabilityExtensions,
+      ]);
+    } catch (error) {
+      console.error('[ChatInput] Failed to load capability extensions:', error);
+      setCapabilityExtensions(officialCapabilityExtensions);
+    } finally {
+      setCapabilityExtensionsLoading(false);
+    }
+  }, [capabilityExtensionsLoading]);
 
   useEffect(() => {
     if (shouldShowSkillMenu) {
@@ -792,6 +911,7 @@ export function ChatInput({
       (value.trim() ||
         selectedSkill ||
         selectedCapabilityIds.length > 0 ||
+        selectedCapabilityExtensionIds.length > 0 ||
         attachments.length > 0) &&
       !isRunning &&
       !disabled
@@ -801,18 +921,47 @@ export function ChatInput({
         selectedCapabilities.length > 0
           ? `使用以下能力：${selectedCapabilities.map((capability) => capability.instruction).join('、')}。`
           : '';
-      const text = selectedSkill
+      let text = selectedSkill
         ? `/${selectedSkill.name}${capabilityInstruction ? ` ${capabilityInstruction}` : ''}${trimmedValue ? ` ${trimmedValue}` : ''}`
         : [capabilityInstruction, trimmedValue].filter(Boolean).join('\n');
+      const selectedMcpServerNames = selectedCapabilityExtensions
+        .map((capability) => capability.mcpServerName)
+        .filter((name): name is string => Boolean(name));
+      const capabilityExtensionInstruction =
+        selectedCapabilityExtensions.length > 0
+          ? [
+              `已选能力扩展：${selectedCapabilityExtensions.map((capability) => capability.name).join('、')}。`,
+              ...selectedCapabilityExtensions.map(
+                (capability) => capability.instruction
+              ),
+              selectedMcpServerNames.length > 0
+                ? `本次仅挂载这些真实 MCP 服务：${selectedMcpServerNames.join('、')}。`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : '';
+      const executionScope: AgentExecutionScope | undefined =
+        capabilityExtensionInstruction || selectedMcpServerNames.length > 0
+          ? {
+              instruction: capabilityExtensionInstruction,
+              mcpServerNames: selectedMcpServerNames,
+            }
+          : undefined;
+      if (!text && selectedCapabilityExtensions.length > 0) {
+        text = `使用能力扩展：${selectedCapabilityExtensions.map((capability) => capability.name).join('、')}`;
+      }
       const messageAttachments = await convertToMessageAttachments();
 
       setValue('');
       setAttachments([]);
       setSelectedSkill(null);
+      setSelectedCapabilityExtensionIds([]);
+      setCapabilityExtensionQuery('');
       if (!preserveCapabilitiesOnSubmit) {
         setSelectedCapabilityIds([]);
       }
-      await onSubmit(text, messageAttachments, chatMode);
+      await onSubmit(text, messageAttachments, chatMode, executionScope);
     }
   };
 
@@ -828,6 +977,34 @@ export function ChatInput({
     setSelectedCapabilityIds([]);
     onCapabilitySelect?.(null);
   }, [onCapabilitySelect]);
+
+  const toggleCapabilityExtension = useCallback((capabilityId: string) => {
+    setSelectedCapabilityExtensionIds((current) =>
+      current.includes(capabilityId)
+        ? current.filter((id) => id !== capabilityId)
+        : [...current, capabilityId]
+    );
+  }, []);
+
+  const removeSelectedCapabilityExtension = useCallback(
+    (capabilityId: string) => {
+      setSelectedCapabilityExtensionIds((current) =>
+        current.filter((id) => id !== capabilityId)
+      );
+    },
+    []
+  );
+
+  const handleTextareaChange = (
+    event: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
+    setValue(event.target.value);
+    setTextareaScrollTop(event.currentTarget.scrollTop);
+  };
+
+  const handleTextareaScroll = (event: React.UIEvent<HTMLTextAreaElement>) => {
+    setTextareaScrollTop(event.currentTarget.scrollTop);
+  };
 
   const selectSkill = useCallback((skill: SkillOption) => {
     setSelectedSkill(skill);
@@ -959,10 +1136,15 @@ export function ChatInput({
   };
 
   const isHome = variant === 'home';
+  const inputTextClassName = cn(
+    'w-full resize-none border-0 bg-transparent focus:outline-none',
+    isHome ? 'text-base leading-7' : 'px-1 text-sm leading-6'
+  );
   const canSubmit =
     (value.trim() ||
       selectedSkill ||
       selectedCapabilityIds.length > 0 ||
+      selectedCapabilityExtensionIds.length > 0 ||
       attachments.length > 0) &&
     !disabled;
 
@@ -996,7 +1178,7 @@ export function ChatInput({
         'relative w-full transition-colors',
         isHome
           ? 'rounded-2xl border border-transparent bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(255,252,248,0.94))_padding-box,linear-gradient(135deg,rgba(249,115,22,0.28),rgba(124,58,237,0.16),rgba(6,182,212,0.2))_border-box] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.09),0_1px_0_rgba(255,255,255,0.9)_inset] focus-within:shadow-[0_20px_48px_rgba(249,115,22,0.12),0_0_0_3px_rgba(249,115,22,0.08)]'
-          : 'rounded-xl border border-transparent bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(255,253,250,0.94))_padding-box,linear-gradient(135deg,rgba(249,115,22,0.18),rgba(124,58,237,0.1),rgba(226,232,240,0.9))_border-box] p-3 shadow-sm',
+          : 'border-border/80 bg-background rounded-xl border p-3 shadow-sm focus-within:border-orange-300 focus-within:ring-2 focus-within:ring-orange-100',
         isDragging && 'bg-primary/5 border-primary/50 border-2',
         className
       )}
@@ -1176,29 +1358,84 @@ export function ChatInput({
         </div>
       )}
 
+      {selectedCapabilityExtensions.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {selectedCapabilityExtensions.map((capability) => {
+            const Icon = capability.icon;
+
+            return (
+              <span
+                key={capability.id}
+                className="inline-flex h-8 max-w-full items-center gap-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 text-sm font-medium text-orange-700"
+              >
+                <Icon className="size-3.5 shrink-0" />
+                <span className="truncate">{capability.name}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    removeSelectedCapabilityExtension(capability.id)
+                  }
+                  className="-mr-1 rounded p-0.5 text-orange-500 transition-colors hover:text-orange-700"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {/* Textarea */}
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onCompositionStart={handleCompositionStart}
-        onCompositionEnd={handleCompositionEnd}
-        onPaste={handlePaste}
-        onClick={onInputActivate}
-        placeholder={selectedSkill ? 'Add arguments...' : placeholder}
-        className={cn(
-          'text-foreground placeholder:text-muted-foreground w-full resize-none border-0 bg-transparent focus:outline-none',
-          isHome ? 'text-base' : 'px-1 text-sm'
+      <div className="relative overflow-hidden">
+        {hasMentionHighlights && (
+          <div
+            aria-hidden="true"
+            className={cn(
+              inputTextClassName,
+              'pointer-events-none absolute inset-x-0 top-0 z-20 break-words whitespace-pre-wrap text-transparent'
+            )}
+            style={{
+              transform: `translateY(-${textareaScrollTop}px)`,
+            }}
+          >
+            {mentionHighlightSegments.map((segment, index) =>
+              segment.isMention ? (
+                <span
+                  key={`${segment.text}-${index}`}
+                  className="rounded-md bg-orange-100 box-decoration-clone font-semibold text-orange-700 shadow-[0_0_0_4px_rgba(255,237,213,0.95)] ring-1 ring-orange-300"
+                >
+                  {segment.text}
+                </span>
+              ) : (
+                <span key={`${segment.text}-${index}`}>{segment.text}</span>
+              )
+            )}
+          </div>
         )}
-        style={{
-          minHeight: isHome ? '56px' : '20px',
-          maxHeight: isHome ? '200px' : '120px',
-          overflowY: 'hidden',
-        }}
-        rows={1}
-        disabled={isRunning || disabled}
-      />
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={handleTextareaChange}
+          onScroll={handleTextareaScroll}
+          onKeyDown={handleKeyDown}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
+          onPaste={handlePaste}
+          onClick={onInputActivate}
+          placeholder={selectedSkill ? 'Add arguments...' : placeholder}
+          className={cn(
+            inputTextClassName,
+            'text-foreground placeholder:text-muted-foreground relative z-10'
+          )}
+          style={{
+            minHeight: isHome ? '56px' : '20px',
+            maxHeight: isHome ? '200px' : '120px',
+            overflowY: 'hidden',
+          }}
+          rows={1}
+          disabled={isRunning || disabled}
+        />
+      </div>
 
       {/* Bottom Actions */}
       <div
@@ -1209,7 +1446,14 @@ export function ChatInput({
       >
         {/* Add Button + Category Tag */}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <DropdownMenu modal={false}>
+          <DropdownMenu
+            modal={false}
+            onOpenChange={(open) => {
+              if (open) {
+                void loadCapabilityExtensions();
+              }
+            }}
+          >
             <DropdownMenuTrigger
               disabled={isRunning || disabled}
               className={cn(
@@ -1233,6 +1477,88 @@ export function ChatInput({
                 <Paperclip className="size-4" />
                 <span>{t.home.addFilesOrPhotos}</span>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className="cursor-pointer gap-3 py-2.5">
+                  <Sparkles className="size-4" />
+                  <span>能力扩展</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent
+                  sideOffset={10}
+                  className="z-50 w-96 p-2"
+                >
+                  <DropdownMenuLabel className="px-2 pt-1 pb-2">
+                    能力扩展
+                  </DropdownMenuLabel>
+                  <div className="relative mb-2">
+                    <Search className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+                    <input
+                      value={capabilityExtensionQuery}
+                      onChange={(event) =>
+                        setCapabilityExtensionQuery(event.target.value)
+                      }
+                      onKeyDown={(event) => event.stopPropagation()}
+                      placeholder="搜索 AI 能力或 MCP 服务"
+                      className="border-input bg-background h-9 w-full rounded-lg border pr-3 pl-9 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                    />
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {capabilityExtensionsLoading ? (
+                      <div className="text-muted-foreground px-3 py-3 text-sm">
+                        加载能力扩展...
+                      </div>
+                    ) : filteredCapabilityExtensions.length > 0 ? (
+                      filteredCapabilityExtensions.map((capability) => {
+                        const Icon = capability.icon;
+                        const selected =
+                          selectedCapabilityExtensionIds.includes(
+                            capability.id
+                          );
+
+                        return (
+                          <DropdownMenuItem
+                            key={capability.id}
+                            onSelect={(event) => {
+                              event.preventDefault();
+                              toggleCapabilityExtension(capability.id);
+                            }}
+                            className="cursor-pointer items-start gap-3 rounded-lg py-2.5"
+                          >
+                            <span
+                              className={cn(
+                                'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border bg-gradient-to-br',
+                                capability.accent
+                              )}
+                            >
+                              <Icon className="size-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="text-foreground truncate text-sm font-semibold">
+                                  {capability.name}
+                                </span>
+                                <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+                                  {capability.kind === 'mcp' ? 'MCP' : 'AI'}
+                                </span>
+                              </span>
+                              <span className="text-muted-foreground mt-0.5 line-clamp-2 block text-xs leading-5">
+                                {capability.description}
+                              </span>
+                            </span>
+                            {selected && (
+                              <CircleCheck className="mt-1 size-4 shrink-0 text-orange-600" />
+                            )}
+                          </DropdownMenuItem>
+                        );
+                      })
+                    ) : (
+                      <div className="text-muted-foreground px-3 py-3 text-sm">
+                        没有匹配的能力扩展
+                      </div>
+                    )}
+                  </div>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
 

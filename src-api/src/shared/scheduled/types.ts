@@ -82,6 +82,7 @@ export interface ScheduledTaskExecutionConfig {
     userDirEnabled: boolean;
     appDirEnabled: boolean;
     mcpConfigPath?: string;
+    includeServers?: string[];
   };
   workDir?: string;
   language?: string;

@@ -140,6 +140,8 @@ export interface McpConfig {
   appDirEnabled: boolean;
   /** Custom MCP config file path (legacy support) */
   mcpConfigPath?: string;
+  /** Optional allow-list of MCP server names to mount for this run */
+  includeServers?: string[];
 }
 
 export interface AgentOptions {

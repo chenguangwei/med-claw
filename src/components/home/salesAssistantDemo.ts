@@ -5,9 +5,36 @@ export type SalesDemoTurn =
     }
   | {
       role: 'assistant';
+      agentTrace?: SalesAgentTrace;
+      plan?: SalesAgentPlan;
       thinking: string[];
       chunks: string[];
     };
+
+export interface SalesAgentTraceItem {
+  name: string;
+  input: string;
+  output: string;
+}
+
+export interface SalesAgentKnowledgeHit {
+  source: string;
+  summary: string;
+}
+
+export interface SalesAgentTrace {
+  intent: string;
+  skills: SalesAgentTraceItem[];
+  tools: SalesAgentTraceItem[];
+  knowledgeHits: SalesAgentKnowledgeHit[];
+  decisions: string[];
+}
+
+export interface SalesAgentPlan {
+  goal: string;
+  steps: string[];
+  note: string;
+}
 
 export interface SalesDemoScenario {
   id:
@@ -21,6 +48,9 @@ export interface SalesDemoScenario {
   intent: string;
   turns: SalesDemoTurn[];
 }
+
+const salesKnowledgeBaseMcpTool =
+  'mcp__sales_knowledge_base__query_product_terms';
 
 export interface SalesFaq {
   question: string;
@@ -59,6 +89,49 @@ export const salesDemoScenarios: SalesDemoScenario[] = [
       },
       {
         role: 'assistant',
+        plan: {
+          goal: '查询并解释安康优享百万医疗产品的等待期和免赔额条款',
+          steps: [
+            '使用销售知识库 MCP 查询产品详细信息',
+            '核对产品条款中的等待期和免赔额字段',
+            '整理等待期和免赔额的解释说明',
+          ],
+          note: '将基于销售知识库 MCP 的真实信息进行解答',
+        },
+        agentTrace: {
+          intent: '产品条款咨询',
+          skills: [
+            {
+              name: 'insurance-product-terms-consulting',
+              input: '产品条款咨询：安康优享百万医疗的等待期和免赔额怎么解释？',
+              output:
+                '命中产品条款咨询流程，需要调用销售知识库 MCP 查询产品责任字段。',
+            },
+          ],
+          tools: [
+            {
+              name: salesKnowledgeBaseMcpTool,
+              input:
+                'productName=安康优享百万医疗 2026 版; fields=等待期,免赔额,续保规则,除外责任',
+              output:
+                '销售知识库 MCP 返回：疾病住院等待期 30 天；意外医疗无等待期；一般医疗年度免赔额 1 万元；重大疾病医疗 0 免赔。',
+            },
+          ],
+          knowledgeHits: [
+            {
+              source:
+                '销售知识库 MCP / product_terms/ankang-youxiang-million-medical-2026',
+              summary:
+                '安康优享百万医疗 2026 版条款：疾病住院医疗等待期 30 天，意外医疗不设等待期；一般医疗年度免赔额 1 万元，重大疾病医疗 0 免赔。',
+            },
+          ],
+          decisions: [
+            '识别意图：产品条款咨询。',
+            '通过销售知识库 MCP 检索安康优享百万医疗 2026 版条款。',
+            '抽取等待期、年度免赔额、续保规则和除外责任字段。',
+            '将条款语言整理成销售人员可直接解释的口径。',
+          ],
+        },
         thinking: [
           '识别意图：产品条款咨询。',
           '检索产品：安康优享百万医疗 2026 版。',
@@ -209,6 +282,36 @@ export const salesDemoScenarios: SalesDemoScenario[] = [
       },
       {
         role: 'assistant',
+        agentTrace: {
+          intent: '客户、保单信息咨询',
+          skills: [
+            {
+              name: 'insurance-customer-policy-consulting',
+              input: '客户、保单信息咨询：帮我查一下客户李明的保单状态。',
+              output: '命中客户/保单信息查询流程，需要先校验唯一查询入参。',
+            },
+          ],
+          tools: [
+            {
+              name: 'extractCustomerPolicyIdentifier',
+              input: '帮我查一下客户李明的保单状态。',
+              output: '未提取到客户号或保单号。',
+            },
+          ],
+          knowledgeHits: [
+            {
+              source: 'customer-policy-query-sop',
+              summary:
+                '客户/保单查询必须使用客户号或保单号作为最小入参；姓名不能唯一定位客户。',
+            },
+          ],
+          decisions: [
+            '识别意图：客户、保单信息咨询。',
+            '检查入参：只有客户姓名，没有客户号或保单号。',
+            '安全约束：姓名可能重名，且涉及个人与保单敏感信息，不能直接返回结果。',
+            '下一步：先提示用户补充客户号或保单号。',
+          ],
+        },
         thinking: [
           '识别意图：客户、保单信息咨询。',
           '发现缺少必要入参：客户号或保单号。',
@@ -224,6 +327,41 @@ export const salesDemoScenarios: SalesDemoScenario[] = [
       },
       {
         role: 'assistant',
+        agentTrace: {
+          intent: '客户、保单信息咨询',
+          skills: [
+            {
+              name: 'insurance-customer-policy-consulting',
+              input: '客户号 C10086',
+              output: '识别为客户维度查询，进入客户详情链接生成流程。',
+            },
+          ],
+          tools: [
+            {
+              name: 'extractCustomerPolicyIdentifier',
+              input: '客户号 C10086',
+              output: 'customerNo=C10086',
+            },
+            {
+              name: 'buildCustomerUrl',
+              input: 'customerNo=C10086',
+              output: buildCustomerUrl('C10086'),
+            },
+          ],
+          knowledgeHits: [
+            {
+              source: 'customer-policy-query-sop',
+              summary:
+                '客户号查询返回客户详情入口，详情页承载证件、联系方式、名下保单和服务记录。',
+            },
+          ],
+          decisions: [
+            '识别意图：客户、保单信息咨询。',
+            '提取客户号：C10086。',
+            '分流判断：客户号走客户详情入口，不走保单详情入口。',
+            '拼接客户详情链接，并返回指定客户查询话术。',
+          ],
+        },
         thinking: ['提取客户号：C10086。', '拼接客户详情链接并返回指定话术。'],
         chunks: [
           '已识别客户号 **C10086**。\n\n',
@@ -237,6 +375,41 @@ export const salesDemoScenarios: SalesDemoScenario[] = [
       },
       {
         role: 'assistant',
+        agentTrace: {
+          intent: '客户、保单信息咨询',
+          skills: [
+            {
+              name: 'insurance-customer-policy-consulting',
+              input: '再查保单号 P20260521001',
+              output: '识别为保单维度查询，进入保单详情链接生成流程。',
+            },
+          ],
+          tools: [
+            {
+              name: 'extractCustomerPolicyIdentifier',
+              input: '再查保单号 P20260521001',
+              output: 'policyNo=P20260521001',
+            },
+            {
+              name: 'buildPolicyUrl',
+              input: 'policyNo=P20260521001',
+              output: buildPolicyUrl('P20260521001'),
+            },
+          ],
+          knowledgeHits: [
+            {
+              source: 'customer-policy-query-sop',
+              summary:
+                '保单号查询返回保单详情入口，详情页承载状态、缴费计划、责任明细和批改记录。',
+            },
+          ],
+          decisions: [
+            '识别意图：客户、保单信息咨询。',
+            '提取保单号：P20260521001。',
+            '分流判断：保单号走保单详情入口，不能沿用上一轮客户号链接。',
+            '拼接保单详情链接，并返回指定保单查询话术。',
+          ],
+        },
         thinking: [
           '提取保单号：P20260521001。',
           '拼接保单详情链接并返回指定话术。',

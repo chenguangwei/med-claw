@@ -466,7 +466,7 @@ export const defaultSettings: Settings = {
   theme: 'system',
   accentColor: 'orange',
   backgroundStyle: 'default',
-  language: '', // Empty string triggers system language detection on first run
+  language: 'zh-CN',
 };
 
 const DB_NAME = 'sqlite:uniins-claw.db';

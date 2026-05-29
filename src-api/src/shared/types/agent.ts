@@ -68,6 +68,7 @@ export interface McpConfigRequest {
   userDirEnabled: boolean;
   appDirEnabled: boolean;
   mcpConfigPath?: string;
+  includeServers?: string[];
 }
 
 /**

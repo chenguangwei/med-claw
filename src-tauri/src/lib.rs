@@ -1,11 +1,14 @@
+use serde::{Deserialize, Serialize};
+use std::net::UdpSocket;
+#[cfg(not(debug_assertions))]
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 #[cfg(not(debug_assertions))]
 use tauri::Manager;
 #[cfg(not(debug_assertions))]
-use tauri_plugin_shell::ShellExt;
-#[cfg(not(debug_assertions))]
 use tauri_plugin_shell::process::CommandChild;
 #[cfg(not(debug_assertions))]
-use std::sync::Mutex;
+use tauri_plugin_shell::ShellExt;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 // Store the sidecar child process for cleanup on exit
@@ -16,6 +19,126 @@ struct ApiSidecar(Mutex<Option<CommandChild>>);
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+const LAN_DISCOVERY_PORT: u16 = 34277;
+const LAN_DISCOVERY_PROBE: &str = "UNIINS_CLAW_DISCOVER_V1";
+const LAN_DISCOVERY_REPLY: &str = "UNIINS_CLAW_PEER_V1|";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LanCollaborationPeer {
+    id: String,
+    name: String,
+    role: String,
+    device: String,
+    workspace: String,
+    status: String,
+    address: Option<String>,
+    source: String,
+}
+
+fn local_lan_peer() -> LanCollaborationPeer {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "本机用户".to_string());
+    let host = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| std::env::consts::OS.to_string());
+
+    LanCollaborationPeer {
+        id: format!("local-{}-{}", user, host)
+            .replace(' ', "-")
+            .to_lowercase(),
+        name: user,
+        role: "本机协作者".to_string(),
+        device: format!("{} {}", std::env::consts::OS, host),
+        workspace: "当前工作区".to_string(),
+        status: "online".to_string(),
+        address: None,
+        source: "local".to_string(),
+    }
+}
+
+fn start_lan_discovery_responder() {
+    std::thread::spawn(|| {
+        let socket = match UdpSocket::bind(("0.0.0.0", LAN_DISCOVERY_PORT)) {
+            Ok(socket) => socket,
+            Err(error) => {
+                eprintln!("[LAN Discovery] Failed to bind responder: {}", error);
+                return;
+            }
+        };
+
+        let _ = socket.set_broadcast(true);
+        let mut buffer = [0_u8; 512];
+
+        loop {
+            let Ok((size, source)) = socket.recv_from(&mut buffer) else {
+                continue;
+            };
+            let message = String::from_utf8_lossy(&buffer[..size]);
+            if message.trim() != LAN_DISCOVERY_PROBE {
+                continue;
+            }
+
+            let mut peer = local_lan_peer();
+            peer.address = Some(source.ip().to_string());
+            peer.source = "lan".to_string();
+
+            if let Ok(payload) = serde_json::to_string(&peer) {
+                let reply = format!("{}{}", LAN_DISCOVERY_REPLY, payload);
+                let _ = socket.send_to(reply.as_bytes(), source);
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn discover_lan_collaboration_peers() -> Result<Vec<LanCollaborationPeer>, String> {
+    let socket = UdpSocket::bind(("0.0.0.0", 0)).map_err(|error| error.to_string())?;
+    socket
+        .set_broadcast(true)
+        .map_err(|error| error.to_string())?;
+    socket
+        .set_read_timeout(Some(Duration::from_millis(420)))
+        .map_err(|error| error.to_string())?;
+
+    let _ = socket.send_to(
+        LAN_DISCOVERY_PROBE.as_bytes(),
+        ("255.255.255.255", LAN_DISCOVERY_PORT),
+    );
+
+    let started_at = Instant::now();
+    let mut peers = Vec::new();
+    let mut buffer = [0_u8; 2048];
+
+    while started_at.elapsed() < Duration::from_millis(480) {
+        let Ok((size, source)) = socket.recv_from(&mut buffer) else {
+            break;
+        };
+        let message = String::from_utf8_lossy(&buffer[..size]);
+        let Some(payload) = message.strip_prefix(LAN_DISCOVERY_REPLY) else {
+            continue;
+        };
+
+        if let Ok(mut peer) = serde_json::from_str::<LanCollaborationPeer>(payload) {
+            peer.address = Some(source.ip().to_string());
+            peer.source = "lan".to_string();
+            if !peers
+                .iter()
+                .any(|item: &LanCollaborationPeer| item.id == peer.id)
+            {
+                peers.push(peer);
+            }
+        }
+    }
+
+    if peers.is_empty() {
+        peers.push(local_lan_peer());
+    }
+
+    Ok(peers)
 }
 
 /// Kill any existing process on the API port before starting sidecar
@@ -33,7 +156,10 @@ fn kill_existing_api_process(port: u16) {
             let pids = String::from_utf8_lossy(&output.stdout);
             for pid in pids.lines() {
                 if let Ok(pid_num) = pid.trim().parse::<i32>() {
-                    println!("[API] Killing existing process on port {}: PID {}", port, pid_num);
+                    println!(
+                        "[API] Killing existing process on port {}: PID {}",
+                        port, pid_num
+                    );
                     let _ = Command::new("kill")
                         .args(["-9", &pid_num.to_string()])
                         .output();
@@ -45,18 +171,16 @@ fn kill_existing_api_process(port: u16) {
     // On Windows, use netstat and taskkill
     #[cfg(windows)]
     {
-        if let Ok(output) = Command::new("netstat")
-            .args(["-ano", "-p", "TCP"])
-            .output()
-        {
+        if let Ok(output) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 if line.contains(&format!(":{}", port)) && line.contains("LISTENING") {
                     if let Some(pid) = line.split_whitespace().last() {
-                        println!("[API] Killing existing process on port {}: PID {}", port, pid);
-                        let _ = Command::new("taskkill")
-                            .args(["/F", "/PID", pid])
-                            .output();
+                        println!(
+                            "[API] Killing existing process on port {}: PID {}",
+                            port, pid
+                        );
+                        let _ = Command::new("taskkill").args(["/F", "/PID", pid]).output();
                     }
                 }
             }
@@ -237,6 +361,8 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            start_lan_discovery_responder();
+
             // In development mode (tauri dev), skip sidecar and use external API server
             // Run `pnpm dev:api` separately for hot-reload support
             // In production, spawn the bundled API sidecar
@@ -293,7 +419,10 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            discover_lan_collaboration_peers
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {

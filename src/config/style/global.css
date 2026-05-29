@@ -99,6 +99,11 @@ button {
   @apply border-border outline-ring/50 cursor-pointer;
 }
 
+.iconfont {
+  font-style: normal;
+  line-height: 1;
+}
+
 pre {
   @apply px-4;
 }

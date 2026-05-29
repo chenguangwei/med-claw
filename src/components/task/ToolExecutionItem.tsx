@@ -111,6 +111,10 @@ function isExpectedWarning(toolName: string, output: string): boolean {
   return false;
 }
 
+function hasToolUseError(output: string): boolean {
+  return /<tool_use_error>[\s\S]*?<\/tool_use_error>/.test(output);
+}
+
 // Parse result to get content info
 function getResultInfo(
   toolName: string,
@@ -130,17 +134,18 @@ function getResultInfo(
     output = toolUseErrorMatch[1].trim();
   }
 
-  const isError = !!result.isError;
+  const isError = !!result.isError || hasToolUseError(output);
   const isWarning = isExpectedWarning(toolName, output);
 
-  if (isError) {
+  if (isError || isWarning) {
     // Show first line or truncated output as error summary
     const firstLine = output.split('\n').find((l) => l.trim()) || output;
     const truncated =
       firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine;
     return {
       hasContent: true,
-      summary: truncated || 'Error occurred',
+      summary:
+        truncated || (isWarning ? 'No matching content' : 'Error occurred'),
       isWarning,
     };
   }
@@ -370,7 +375,8 @@ export function ToolExecutionItem({
 
   // Check status
   const isRunning = isLast && !result;
-  const hasError = !!result?.isError;
+  const resultOutput = result?.output || result?.content || '';
+  const hasError = !!result?.isError || hasToolUseError(resultOutput);
   // If it's a warning (expected non-fatal), don't treat as error
   const isActualError = hasError && !isWarning;
   const isCompleted = !isRunning && !isActualError && result;

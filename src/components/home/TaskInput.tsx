@@ -1,5 +1,9 @@
 import { useNavigate } from 'react-router-dom';
-import { useAgent, type MessageAttachment } from '@/shared/hooks/useAgent';
+import {
+  useAgent,
+  type AgentExecutionScope,
+  type MessageAttachment,
+} from '@/shared/hooks/useAgent';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import { FileText, Globe, Palette, Smartphone } from 'lucide-react';
@@ -47,7 +51,9 @@ export function TaskInput() {
 
   const handleSubmit = async (
     text: string,
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    mode?: 'auto' | 'chat' | 'task',
+    executionScope?: AgentExecutionScope
   ) => {
     if (!text.trim() && (!attachments || attachments.length === 0)) return;
 
@@ -61,7 +67,14 @@ export function TaskInput() {
 
     // Run the agent with prompt and attachments
     // When images are attached, runAgent will use direct execution (skip planning)
-    await runAgent(text, taskId, { sessionId, taskIndex }, attachments);
+    await runAgent(
+      text,
+      taskId,
+      { sessionId, taskIndex },
+      attachments,
+      mode,
+      executionScope
+    );
 
     // Navigate to task detail page with attachments in state
     console.log(
@@ -81,6 +94,7 @@ export function TaskInput() {
         sessionId,
         taskIndex,
         attachments,
+        executionScope,
       },
     });
   };

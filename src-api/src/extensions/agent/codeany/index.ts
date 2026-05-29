@@ -85,9 +85,7 @@ const ResilientWebSearchTool = defineTool({
   },
 });
 
-function getCodeAnyBaseTools(
-  allowedTools?: string[]
-): SdkToolDefinition[] {
+function getCodeAnyBaseTools(allowedTools?: string[]): SdkToolDefinition[] {
   const tools = getAllBaseTools().map((tool) =>
     tool.name === 'WebSearch' ? ResilientWebSearchTool : tool
   );
@@ -498,7 +496,14 @@ export class CodeAnyAgent extends BaseAgent {
       session_id?: string;
       is_error?: boolean;
       num_turns?: number;
-      result?: string | { tool_use_id?: string; tool_name?: string; output?: string };
+      result?:
+        | string
+        | {
+            tool_use_id?: string;
+            tool_name?: string;
+            output?: string;
+            is_error?: boolean;
+          };
       stop_reason?: string | null;
       errors?: string[];
       total_cost_usd?: number;
@@ -538,12 +543,19 @@ export class CodeAnyAgent extends BaseAgent {
         type: 'tool_result',
         toolUseId: msg.result.tool_use_id ?? '',
         output: msg.result.output ?? '',
-        isError: false,
+        isError: !!msg.result.is_error,
       };
     }
 
     if (msg.type === 'result') {
-      const resultText = typeof msg.result === 'string' ? msg.result : undefined;
+      const resultText =
+        typeof msg.result === 'string' ? msg.result : undefined;
+      if (msg.is_error && msg.errors?.length) {
+        yield {
+          type: 'error',
+          message: this.sanitizeText(msg.errors.join('\n')),
+        };
+      }
       yield {
         type: 'result',
         content: resultText || msg.subtype,
@@ -785,6 +797,7 @@ User's request (answer this AFTER reading the images):
     const sdkOpts = this.buildSdkOptions(sessionCwd, options, {
       allowedTools: [],
       abortController: options?.abortController || session.abortController,
+      thinking: { type: 'disabled' },
     });
 
     try {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getWorkanyMcpPath } from '@/shared/lib/paths';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
@@ -15,6 +15,16 @@ import {
   X,
 } from 'lucide-react';
 
+import type {
+  McpCapabilityConfigTemplate,
+  McpTransportType,
+} from '@/components/shared/capability-extensions';
+import {
+  DEFAULT_MCP_ICON_KEY,
+  getMcpIconOption,
+  mcpIconLibrary,
+} from '@/components/shared/mcp-icon-library';
+
 import { Switch } from '../components/Switch';
 import { API_BASE_URL } from '../constants';
 import type {
@@ -23,6 +33,12 @@ import type {
   MCPServerUI,
   SettingsTabProps,
 } from '../types';
+
+interface MCPSettingsProps extends SettingsTabProps {
+  focusRequestId?: number;
+  initialServerName?: string | null;
+  initialServerTemplate?: McpCapabilityConfigTemplate | null;
+}
 
 // MCP Card component
 function MCPCard({
@@ -36,13 +52,30 @@ function MCPCard({
 }) {
   const { t } = useLanguage();
   const [showMenu, setShowMenu] = useState(false);
+  const iconOption = getMcpIconOption(server.icon);
+  const Icon = iconOption.icon;
 
   return (
     <div className="border-border bg-background hover:border-foreground/20 relative flex flex-col rounded-xl border p-4 transition-colors">
-      <div className="mb-2">
-        <span className="text-foreground text-sm font-medium">
-          {server.name}
-        </span>
+      <div className="mb-3 flex items-start gap-3">
+        <div
+          className={cn(
+            'flex size-10 shrink-0 items-center justify-center rounded-xl border bg-gradient-to-br',
+            iconOption.accent
+          )}
+        >
+          <Icon className="size-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="text-foreground block truncate text-sm font-medium">
+            {server.name}
+          </span>
+          <p className="text-muted-foreground mt-1 truncate text-xs">
+            {server.type === 'stdio'
+              ? server.command || t.settings.mcpTypeStdio
+              : server.url || t.settings.mcpTypeHttp}
+          </p>
+        </div>
       </div>
 
       <p className="text-muted-foreground mb-4 flex-1 text-xs">
@@ -108,12 +141,13 @@ interface ConfigDialogState {
   open: boolean;
   mode: 'add' | 'edit';
   serverName: string;
-  transportType: 'stdio' | 'http' | 'sse';
+  transportType: McpTransportType;
   command: string;
   args: string[];
   env: KeyValuePair[];
   url: string;
   headers: KeyValuePair[];
+  icon: string;
   editServerId?: string;
 }
 
@@ -127,9 +161,37 @@ const initialConfigDialog: ConfigDialogState = {
   env: [],
   url: '',
   headers: [],
+  icon: DEFAULT_MCP_ICON_KEY,
 };
 
-export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
+function objectToKeyValuePairs(
+  obj: Record<string, string> | undefined
+): KeyValuePair[] {
+  if (!obj) return [];
+  return Object.entries(obj).map(([key, value], index) => ({
+    id: `kv-${Date.now()}-${index}`,
+    key,
+    value,
+  }));
+}
+
+function keyValuePairsToObject(pairs: KeyValuePair[]): Record<string, string> {
+  const obj: Record<string, string> = {};
+  for (const pair of pairs) {
+    if (pair.key.trim()) {
+      obj[pair.key] = pair.value;
+    }
+  }
+  return obj;
+}
+
+export function MCPSettings({
+  settings,
+  onSettingsChange,
+  focusRequestId,
+  initialServerName,
+  initialServerTemplate,
+}: MCPSettingsProps) {
   const [servers, setServers] = useState<MCPServerUI[]>([]);
   const [mainTab, setMainTab] = useState<MainTab>('installed');
   const [loading, setLoading] = useState(true);
@@ -154,6 +216,9 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
   // Config dialog (for both add and edit)
   const [configDialog, setConfigDialog] =
     useState<ConfigDialogState>(initialConfigDialog);
+  const [handledFocusRequestId, setHandledFocusRequestId] = useState<
+    number | undefined
+  >();
 
   const { t } = useLanguage();
 
@@ -199,7 +264,13 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
           exists: boolean;
           servers: Record<
             string,
-            MCPServerStdio | { url: string; headers?: Record<string, string> }
+            | MCPServerStdio
+            | {
+                url: string;
+                type?: 'http' | 'sse';
+                headers?: Record<string, string>;
+                icon?: string;
+              }
           >;
         }[]) {
           if (configInfo.name === 'claude') {
@@ -216,6 +287,7 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
               type?: 'http' | 'sse';
               url?: string;
               headers?: Record<string, string>;
+              icon?: string;
             };
             // Determine type: use explicit type if provided, otherwise default based on config
             let serverType: 'stdio' | 'http' | 'sse' = 'stdio';
@@ -231,8 +303,10 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
                 ? undefined
                 : (serverConfig as MCPServerStdio).command,
               args: hasUrl ? undefined : (serverConfig as MCPServerStdio).args,
+              env: hasUrl ? undefined : (serverConfig as MCPServerStdio).env,
               url: hasUrl ? cfg.url : undefined,
               headers: hasUrl ? cfg.headers : undefined,
+              icon: cfg.icon,
               autoExecute: true,
               source: configInfo.name as 'uniins-claw' | 'claude',
             });
@@ -251,12 +325,7 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
     }
 
     loadMCPConfig();
-  }, []);
-
-  // Initialize platform-aware default path
-  useEffect(() => {
-    getWorkanyMcpPath().then(setDefaultMcpPath);
-  }, []);
+  }, [t.settings.mcpLoadError]);
 
   // Save MCP config via API
   const saveMCPConfig = async (serverList: MCPServerUI[]) => {
@@ -268,6 +337,9 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
           const serverConfig: Record<string, unknown> = {
             url: server.url || '',
           };
+          if (server.icon) {
+            serverConfig.icon = server.icon;
+          }
           // Only add type field for sse (http is default)
           if (server.type === 'sse') {
             serverConfig.type = 'sse';
@@ -280,8 +352,14 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
           const serverConfig: Record<string, unknown> = {
             command: server.command || '',
           };
+          if (server.icon) {
+            serverConfig.icon = server.icon;
+          }
           if (server.args && server.args.length > 0) {
             serverConfig.args = server.args;
+          }
+          if (server.env && Object.keys(server.env).length > 0) {
+            serverConfig.env = server.env;
           }
           mcpServers[server.name] = serverConfig;
         }
@@ -355,8 +433,10 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
           enabled: true,
           command: cfg.command as string | undefined,
           args: cfg.args as string[] | undefined,
+          env: cfg.env as Record<string, string> | undefined,
           url: cfg.url as string | undefined,
           headers: cfg.headers as Record<string, string> | undefined,
+          icon: cfg.icon as string | undefined,
           autoExecute: true,
           source: 'uniins-claw',
         };
@@ -377,33 +457,8 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
     }
   };
 
-  // Helper to convert object to KeyValuePair array
-  const objectToKeyValuePairs = (
-    obj: Record<string, string> | undefined
-  ): KeyValuePair[] => {
-    if (!obj) return [];
-    return Object.entries(obj).map(([key, value], index) => ({
-      id: `kv-${Date.now()}-${index}`,
-      key,
-      value,
-    }));
-  };
-
-  // Helper to convert KeyValuePair array to object
-  const keyValuePairsToObject = (
-    pairs: KeyValuePair[]
-  ): Record<string, string> => {
-    const obj: Record<string, string> = {};
-    for (const pair of pairs) {
-      if (pair.key.trim()) {
-        obj[pair.key] = pair.value;
-      }
-    }
-    return obj;
-  };
-
   // Handle configure server (open config dialog for editing)
-  const handleConfigureServer = (server: MCPServerUI) => {
+  const handleConfigureServer = useCallback((server: MCPServerUI) => {
     setConfigDialog({
       open: true,
       mode: 'edit',
@@ -411,18 +466,77 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
       transportType: server.type,
       command: server.command || '',
       args: server.args || [],
-      env: [],
+      env: objectToKeyValuePairs(server.env),
       url: server.url || '',
       headers: objectToKeyValuePairs(server.headers),
+      icon: server.icon || DEFAULT_MCP_ICON_KEY,
       editServerId: server.id,
     });
-  };
+  }, []);
+
+  const openTemplateConfigDialog = useCallback(
+    (template: McpCapabilityConfigTemplate) => {
+      setConfigDialog({
+        ...initialConfigDialog,
+        open: true,
+        mode: 'add',
+        serverName: template.serverName,
+        transportType: template.transportType,
+        command: template.command || '',
+        args: template.args || [],
+        url: template.url || '',
+        icon: template.icon || DEFAULT_MCP_ICON_KEY,
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (
+      !focusRequestId ||
+      handledFocusRequestId === focusRequestId ||
+      loading
+    ) {
+      return;
+    }
+
+    const targetName =
+      initialServerName || initialServerTemplate?.serverName || '';
+    if (!targetName) {
+      setHandledFocusRequestId(focusRequestId);
+      return;
+    }
+
+    setMainTab('installed');
+    const existingServer = servers.find(
+      (server) => server.name === targetName || server.id === targetName
+    );
+
+    if (existingServer) {
+      handleConfigureServer(existingServer);
+    } else if (initialServerTemplate) {
+      openTemplateConfigDialog(initialServerTemplate);
+    }
+
+    setHandledFocusRequestId(focusRequestId);
+  }, [
+    focusRequestId,
+    handledFocusRequestId,
+    initialServerName,
+    initialServerTemplate,
+    loading,
+    handleConfigureServer,
+    openTemplateConfigDialog,
+    servers,
+  ]);
 
   // Handle save config dialog
   const handleSaveConfigDialog = () => {
     if (!configDialog.serverName) return;
 
     const newServers = [...servers];
+    const envObj = keyValuePairsToObject(configDialog.env);
+    const hasEnv = Object.keys(envObj).length > 0;
     const headersObj = keyValuePairsToObject(configDialog.headers);
     const hasHeaders = Object.keys(headersObj).length > 0;
 
@@ -445,8 +559,13 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
             configDialog.transportType === 'stdio'
               ? configDialog.args
               : undefined,
+          env:
+            configDialog.transportType === 'stdio' && hasEnv
+              ? envObj
+              : undefined,
           url: isUrlType ? configDialog.url : undefined,
           headers: isUrlType && hasHeaders ? headersObj : undefined,
+          icon: configDialog.icon,
         };
       }
     } else {
@@ -473,8 +592,11 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
           configDialog.transportType === 'stdio'
             ? configDialog.args
             : undefined,
+        env:
+          configDialog.transportType === 'stdio' && hasEnv ? envObj : undefined,
         url: isUrlType ? configDialog.url : undefined,
         headers: isUrlType && hasHeaders ? headersObj : undefined,
+        icon: configDialog.icon,
         autoExecute: true,
         source: 'uniins-claw',
       });
@@ -576,6 +698,12 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
       </div>
     );
   }
+
+  const selectedDialogIcon = getMcpIconOption(configDialog.icon);
+  const SelectedDialogIcon = selectedDialogIcon.icon;
+  const customIconfontClass = configDialog.icon.startsWith('iconfont:')
+    ? configDialog.icon.replace(/^iconfont:/, '')
+    : '';
 
   return (
     <>
@@ -751,7 +879,9 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
                   </div>
                   <div className="ml-4 flex shrink-0 items-center gap-2">
                     <button
-                      onClick={() => openFolderInSystem(mcpDirs.app)}
+                      onClick={() =>
+                        openFolderInSystem(mcpDirs.app || defaultMcpPath)
+                      }
                       className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-2 transition-colors"
                     >
                       <FileJson className="size-4" />
@@ -853,10 +983,7 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
                     onChange={(e) =>
                       setConfigDialog({
                         ...configDialog,
-                        transportType: e.target.value as
-                          | 'stdio'
-                          | 'http'
-                          | 'sse',
+                        transportType: e.target.value as McpTransportType,
                       })
                     }
                     className="border-input bg-background text-foreground focus:ring-ring h-10 w-full cursor-pointer rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
@@ -865,6 +992,67 @@ export function MCPSettings({ settings, onSettingsChange }: SettingsTabProps) {
                     <option value="http">http</option>
                     <option value="sse">sse</option>
                   </select>
+                </div>
+
+                {/* Icon */}
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <label className="text-foreground block text-sm font-medium">
+                      {t.settings.mcpIcon}
+                    </label>
+                    <div
+                      className={cn(
+                        'flex h-9 min-w-9 items-center justify-center rounded-xl border bg-gradient-to-br',
+                        selectedDialogIcon.accent
+                      )}
+                    >
+                      <SelectedDialogIcon className="size-5" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-6 gap-2">
+                    {mcpIconLibrary.map((option) => {
+                      const Icon = option.icon;
+                      const selected = configDialog.icon === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() =>
+                            setConfigDialog({
+                              ...configDialog,
+                              icon: option.key,
+                            })
+                          }
+                          className={cn(
+                            'flex h-10 items-center justify-center rounded-xl border transition',
+                            selected
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-border bg-background text-muted-foreground hover:border-foreground/20 hover:text-foreground'
+                          )}
+                          title={option.label}
+                        >
+                          <Icon className="size-5" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input
+                    type="text"
+                    value={customIconfontClass}
+                    onChange={(e) =>
+                      setConfigDialog({
+                        ...configDialog,
+                        icon: e.target.value.trim()
+                          ? `iconfont:${e.target.value.trim()}`
+                          : DEFAULT_MCP_ICON_KEY,
+                      })
+                    }
+                    placeholder={t.settings.mcpIconfontPlaceholder}
+                    className="border-input bg-background text-foreground placeholder:text-muted-foreground focus:ring-ring mt-2 h-10 w-full rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
+                  />
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {t.settings.mcpIconfontHint}
+                  </p>
                 </div>
 
                 {configDialog.transportType === 'stdio' ? (

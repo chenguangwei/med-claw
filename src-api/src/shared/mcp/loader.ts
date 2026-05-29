@@ -5,8 +5,13 @@
  */
 
 import fs from 'fs/promises';
+import { homedir } from 'os';
+import path from 'path';
 
-import { getWorkanyMcpConfigPath } from '@/config/constants';
+import {
+  getClaudeSettingsPath,
+  getWorkanyMcpConfigPath,
+} from '@/config/constants';
 
 // MCP Server Config Types (matching SDK types)
 export interface McpStdioServerConfig {
@@ -44,6 +49,8 @@ interface _UniinsClawMcpConfig {
       // HTTP/SSE config
       url?: string;
       headers?: Record<string, string>;
+      // UI metadata ignored by the runtime loader
+      icon?: string;
     }
   >;
 }
@@ -120,6 +127,56 @@ async function loadMcpServersFromFile(
  */
 export interface McpConfig {
   enabled: boolean;
+  userDirEnabled?: boolean;
+  appDirEnabled?: boolean;
+  mcpConfigPath?: string;
+  includeServers?: string[];
+}
+
+function expandHomePath(inputPath: string): string {
+  if (inputPath === '~') return homedir();
+  if (inputPath.startsWith('~/') || inputPath.startsWith('~\\')) {
+    return path.join(homedir(), inputPath.slice(2));
+  }
+  return inputPath;
+}
+
+function normalizeComparablePath(inputPath: string): string {
+  return path.resolve(expandHomePath(inputPath)).replace(/[\\/]+$/, '').toLowerCase();
+}
+
+function getConfiguredMcpConfigPaths(
+  mcpConfig?: McpConfig
+): Array<{ path: string; sourceName: string }> {
+  const userConfigPath = getClaudeSettingsPath();
+  const appConfigPath = getWorkanyMcpConfigPath();
+  const paths: Array<{ path: string; sourceName: string }> = [];
+  const seen = new Set<string>();
+
+  const addPath = (configPath: string, sourceName: string) => {
+    const expandedPath = expandHomePath(configPath);
+    const comparable = normalizeComparablePath(expandedPath);
+    if (seen.has(comparable)) return;
+    seen.add(comparable);
+    paths.push({ path: expandedPath, sourceName });
+  };
+
+  if (!mcpConfig) {
+    addPath(appConfigPath, 'uniins-claw');
+    return paths;
+  }
+
+  if (mcpConfig.userDirEnabled !== false) {
+    addPath(userConfigPath, 'claude');
+  }
+  if (mcpConfig.appDirEnabled !== false) {
+    addPath(appConfigPath, 'uniins-claw');
+  }
+  if (mcpConfig.mcpConfigPath) {
+    addPath(mcpConfig.mcpConfigPath, 'custom');
+  }
+
+  return paths;
 }
 
 /**
@@ -137,8 +194,25 @@ export async function loadMcpServers(
     return {};
   }
 
-  const configPath = getMcpConfigPath();
-  const servers = await loadMcpServersFromFile(configPath, 'uniins-claw');
+  const servers: Record<string, McpServerConfig> = {};
+  const configPaths = getConfiguredMcpConfigPaths(mcpConfig);
+
+  for (const configInfo of configPaths) {
+    const fileServers = await loadMcpServersFromFile(
+      configInfo.path,
+      configInfo.sourceName
+    );
+    Object.assign(servers, fileServers);
+  }
+
+  if (mcpConfig?.includeServers && mcpConfig.includeServers.length > 0) {
+    const allowedServers = new Set(mcpConfig.includeServers);
+    for (const serverName of Object.keys(servers)) {
+      if (!allowedServers.has(serverName)) {
+        delete servers[serverName];
+      }
+    }
+  }
 
   const serverCount = Object.keys(servers).length;
   if (serverCount > 0) {

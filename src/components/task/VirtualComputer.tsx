@@ -101,11 +101,16 @@ function getLanguageFromFilename(filename?: string): string {
 
 // Extract step outputs from messages
 function extractStepOutputs(messages: AgentMessage[]): StepOutput[] {
-  // Collect tool_result messages for matching with tool_use
+  // Collect tool_result messages for matching with tool_use. Prefer stable IDs;
+  // keep index fallback for messages saved before tool IDs were persisted.
   const toolResultMessages: AgentMessage[] = [];
+  const toolResultsById = new Map<string, AgentMessage>();
   messages.forEach((msg) => {
     if (msg.type === 'tool_result') {
       toolResultMessages.push(msg);
+      if (msg.toolUseId) {
+        toolResultsById.set(msg.toolUseId, msg);
+      }
     }
   });
 
@@ -116,8 +121,8 @@ function extractStepOutputs(messages: AgentMessage[]): StepOutput[] {
       const toolName = m.name || 'Unknown';
       const toolIcon = toolIconMap[toolName] || 'code';
 
-      // Get associated tool_result by index
-      const toolResult = toolResultMessages[index];
+      const toolResult =
+        (m.id && toolResultsById.get(m.id)) || toolResultMessages[index];
       const output = toolResult?.output || '';
 
       let description = '';
