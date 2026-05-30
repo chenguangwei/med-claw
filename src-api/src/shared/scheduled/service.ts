@@ -1,8 +1,5 @@
 import type { AgentMessage } from '@/core/agent';
-import {
-  createSession,
-  runAgent,
-} from '@/shared/services/agent';
+import { createSession, runAgent } from '@/shared/services/agent';
 import { createLogger } from '@/shared/utils/logger';
 
 import {
@@ -19,7 +16,7 @@ import type {
 
 const logger = createLogger('ScheduledTasks');
 const runningTaskIds = new Set<string>();
-let schedulerTimer: NodeJS.Timeout | null = null;
+let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 
 function summarizeMessage(message: AgentMessage): string | null {
   if (message.type === 'result' || message.type === 'done') {
@@ -155,6 +152,16 @@ async function executeTaskRun(
 
   try {
     const session = createSession();
+    const skillsConfig = config.skillsConfig ?? {
+      enabled: true,
+      userDirEnabled: true,
+      appDirEnabled: true,
+    };
+    const scopedSkillsConfig =
+      task.skillNames.length > 0
+        ? { ...skillsConfig, includeSkills: task.skillNames }
+        : skillsConfig;
+
     for await (const message of runAgent(
       buildPrompt(task),
       session,
@@ -164,11 +171,7 @@ async function executeTaskRun(
       config.modelConfig,
       config.sandboxConfig,
       undefined,
-      config.skillsConfig ?? {
-        enabled: true,
-        userDirEnabled: true,
-        appDirEnabled: true,
-      },
+      scopedSkillsConfig,
       config.mcpConfig,
       config.language || 'zh'
     )) {

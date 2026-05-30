@@ -8,6 +8,8 @@
 export {
   loadSkills,
   loadAllSkills,
+  loadScopedSkillDefinitions,
+  formatScopedSkillsForPrompt,
   syncSdkSkills,
   installBuiltinSkills,
   getSkillsPath,

@@ -33,7 +33,10 @@ export interface McpSSEServerConfig {
   headers?: Record<string, string>;
 }
 
-export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig | McpSSEServerConfig;
+export type McpServerConfig =
+  | McpStdioServerConfig
+  | McpHttpServerConfig
+  | McpSSEServerConfig;
 
 // uniins-claw MCP Config file format
 interface _UniinsClawMcpConfig {
@@ -142,7 +145,10 @@ function expandHomePath(inputPath: string): string {
 }
 
 function normalizeComparablePath(inputPath: string): string {
-  return path.resolve(expandHomePath(inputPath)).replace(/[\\/]+$/, '').toLowerCase();
+  return path
+    .resolve(expandHomePath(inputPath))
+    .replace(/[\\/]+$/, '')
+    .toLowerCase();
 }
 
 function getConfiguredMcpConfigPaths(
@@ -205,7 +211,7 @@ export async function loadMcpServers(
     Object.assign(servers, fileServers);
   }
 
-  if (mcpConfig?.includeServers && mcpConfig.includeServers.length > 0) {
+  if (mcpConfig?.includeServers) {
     const allowedServers = new Set(mcpConfig.includeServers);
     for (const serverName of Object.keys(servers)) {
       if (!allowedServers.has(serverName)) {

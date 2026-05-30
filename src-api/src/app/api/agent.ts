@@ -74,7 +74,13 @@ agent.post('/chat', async (c) => {
 
   const abortController = new AbortController();
   const readable = createSSEStream(
-    runChat(body.prompt, body.modelConfig, body.language, body.conversation, abortController)
+    runChat(
+      body.prompt,
+      body.modelConfig,
+      body.language,
+      body.conversation,
+      abortController
+    )
   );
 
   return new Response(readable, { headers: SSE_HEADERS });
@@ -122,6 +128,7 @@ agent.post('/execute', async (c) => {
       userDirEnabled: boolean;
       appDirEnabled: boolean;
       skillsPath?: string;
+      includeSkills?: string[];
     };
     mcpConfig?: {
       enabled: boolean;
@@ -254,7 +261,11 @@ agent.post('/title', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
 
-  const title = await generateTitle(body.prompt, body.modelConfig, body.language);
+  const title = await generateTitle(
+    body.prompt,
+    body.modelConfig,
+    body.language
+  );
   console.log('[AgentAPI] POST /title result:', { title });
   return c.json({ title });
 });

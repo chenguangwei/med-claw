@@ -130,6 +130,28 @@ test('loadMcpServers respects directory toggles and includeServers whitelist', a
   });
 });
 
+test('loadMcpServers treats an empty includeServers list as an explicit deny-all scope', async () => {
+  await withTempHome(async (homeDir) => {
+    const { loadMcpServers } = await import('../src/shared/mcp/loader.js');
+    const appConfigPath = path.join(homeDir, '.uniins-claw', 'mcp.json');
+
+    await fs.mkdir(path.dirname(appConfigPath), { recursive: true });
+    await fs.writeFile(
+      appConfigPath,
+      JSON.stringify({ mcpServers: { appServer: { command: 'node' } } })
+    );
+
+    const servers = await loadMcpServers({
+      enabled: true,
+      userDirEnabled: false,
+      appDirEnabled: true,
+      includeServers: [],
+    });
+
+    assert.deepEqual(servers, {});
+  });
+});
+
 test('loadMcpServers returns no servers when explicitly disabled', async () => {
   await withTempHome(async (homeDir) => {
     const { loadMcpServers } = await import('../src/shared/mcp/loader.js');

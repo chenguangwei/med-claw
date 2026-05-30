@@ -126,6 +126,8 @@ export interface SkillsConfig {
   appDirEnabled: boolean;
   /** Custom skills directory path (legacy support) */
   skillsPath?: string;
+  /** Optional allow-list of skill names available for this run */
+  includeSkills?: string[];
 }
 
 /**

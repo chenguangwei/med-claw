@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE_URL } from '@/config';
+import { SALES_DEMO_CAPABILITY_ID } from '@/shared/assistants/routing';
 import { getSettings } from '@/shared/db/settings';
 import type {
   AgentExecutionScope,
@@ -91,6 +92,7 @@ export interface MentionOption {
   label: string;
   description?: string;
   icon?: React.ComponentType<{ className?: string }>;
+  executionScope?: AgentExecutionScope;
 }
 
 interface MentionHighlightSegment {
@@ -100,9 +102,9 @@ interface MentionHighlightSegment {
 
 const capabilityOptions: CapabilityOption[] = [
   {
-    id: 'sales',
-    label: '销售助手',
-    instruction: '销售助手',
+    id: SALES_DEMO_CAPABILITY_ID,
+    label: '销售演示',
+    instruction: '销售演示',
     icon: BadgeDollarSign,
   },
   {
@@ -252,6 +254,91 @@ function getMentionHighlightSegments(
   }
 
   return segments;
+}
+
+function buildMentionPattern(labels: string[]): RegExp | null {
+  const normalizedLabels = Array.from(
+    new Set(labels.map((label) => label.trim()).filter(Boolean))
+  ).sort((a, b) => b.length - a.length);
+
+  if (normalizedLabels.length === 0) return null;
+
+  return new RegExp(
+    `(^|\\s)@(${normalizedLabels.map(escapeRegExp).join('|')})(?=$|[\\s，。,.!?！？、:：；;])`,
+    'gu'
+  );
+}
+
+function mergeExecutionScopeList(
+  scopes: Array<AgentExecutionScope | undefined>
+): AgentExecutionScope | undefined {
+  const presentScopes = scopes.filter(
+    (scope): scope is AgentExecutionScope => !!scope
+  );
+  if (presentScopes.length === 0) return undefined;
+
+  const mergeStrings = (
+    key: 'assistantIds' | 'assistantNames' | 'skillNames' | 'mcpServerNames'
+  ) => {
+    const values: string[] = [];
+    for (const scope of presentScopes) {
+      const list = scope[key];
+      if (!Array.isArray(list)) continue;
+      for (const value of list) {
+        if (value && !values.includes(value)) values.push(value);
+      }
+    }
+    return presentScopes.some((scope) => Array.isArray(scope[key]))
+      ? values
+      : undefined;
+  };
+
+  const instruction = presentScopes
+    .map((scope) => scope.instruction)
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    assistantIds: mergeStrings('assistantIds'),
+    assistantNames: mergeStrings('assistantNames'),
+    skillNames: mergeStrings('skillNames'),
+    mcpServerNames: mergeStrings('mcpServerNames'),
+    instruction: instruction || undefined,
+  };
+}
+
+function extractMentionExecutionScope(
+  text: string,
+  mentionOptions: MentionOption[]
+): {
+  text: string;
+  executionScope?: AgentExecutionScope;
+} {
+  const pattern = buildMentionPattern(
+    mentionOptions.map((option) => option.label)
+  );
+  if (!pattern) return { text };
+
+  const optionByLabel = new Map(
+    mentionOptions.map((option) => [option.label.trim(), option])
+  );
+  const seen = new Set<string>();
+  const scopes: AgentExecutionScope[] = [];
+
+  const nextText = text.replace(pattern, (match, prefix, label: string) => {
+    const option = optionByLabel.get(label);
+    if (!option?.executionScope) return match;
+    if (option?.executionScope && !seen.has(option.id)) {
+      seen.add(option.id);
+      scopes.push(option.executionScope);
+    }
+    return prefix || '';
+  });
+
+  return {
+    text: nextText.replace(/\s{2,}/g, ' ').trim(),
+    executionScope: mergeExecutionScopeList(scopes),
+  };
 }
 
 function readTopLevelYamlValue(
@@ -916,7 +1003,11 @@ export function ChatInput({
       !isRunning &&
       !disabled
     ) {
-      const trimmedValue = value.trim();
+      const mentionExtraction = extractMentionExecutionScope(
+        value.trim(),
+        mentionOptions
+      );
+      const trimmedValue = mentionExtraction.text;
       const capabilityInstruction =
         selectedCapabilities.length > 0
           ? `使用以下能力：${selectedCapabilities.map((capability) => capability.instruction).join('、')}。`
@@ -941,15 +1032,22 @@ export function ChatInput({
               .filter(Boolean)
               .join('\n')
           : '';
-      const executionScope: AgentExecutionScope | undefined =
+      const capabilityExecutionScope: AgentExecutionScope | undefined =
         capabilityExtensionInstruction || selectedMcpServerNames.length > 0
           ? {
               instruction: capabilityExtensionInstruction,
               mcpServerNames: selectedMcpServerNames,
             }
           : undefined;
+      const executionScope = mergeExecutionScopeList([
+        mentionExtraction.executionScope,
+        capabilityExecutionScope,
+      ]);
       if (!text && selectedCapabilityExtensions.length > 0) {
         text = `使用能力扩展：${selectedCapabilityExtensions.map((capability) => capability.name).join('、')}`;
+      }
+      if (!text && executionScope?.assistantNames?.length) {
+        text = `使用${executionScope.assistantNames.join('、')}处理本次任务`;
       }
       const messageAttachments = await convertToMessageAttachments();
 

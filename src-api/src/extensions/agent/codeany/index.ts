@@ -12,14 +12,13 @@ import {
   createAgent as createSdkAgent,
   defineTool,
   filterTools,
-  formatSkillsForPrompt,
   getAllBaseTools,
-  getSkill,
   query,
 } from '@codeany/open-agent-sdk';
 import type {
   AgentOptions as SdkAgentOptions,
   ToolDefinition as SdkToolDefinition,
+  SkillDefinition,
 } from '@codeany/open-agent-sdk';
 
 import {
@@ -52,7 +51,10 @@ import {
 } from '@/config/constants';
 import { loadMcpServers } from '@/shared/mcp/loader';
 import { searchWebForAgent } from '@/shared/services/web-search';
-import { syncSdkSkills } from '@/shared/skills/loader';
+import {
+  formatScopedSkillsForPrompt,
+  loadScopedSkillDefinitions,
+} from '@/shared/skills/loader';
 import { createLogger, LOG_FILE_PATH } from '@/shared/utils/logger';
 
 const logger = createLogger('CodeAnyAgent');
@@ -85,9 +87,158 @@ const ResilientWebSearchTool = defineTool({
   },
 });
 
-function getCodeAnyBaseTools(allowedTools?: string[]): SdkToolDefinition[] {
+function getInvocableSkills(skills: SkillDefinition[]): SkillDefinition[] {
+  return skills.filter(
+    (skill) =>
+      skill.userInvocable !== false && (!skill.isEnabled || skill.isEnabled())
+  );
+}
+
+function findScopedSkill(
+  skills: SkillDefinition[],
+  skillName: string
+): SkillDefinition | undefined {
+  return skills.find(
+    (skill) =>
+      skill.name === skillName ||
+      skill.aliases?.some((alias) => alias === skillName)
+  );
+}
+
+function createScopedSkillTool(skills: SkillDefinition[]): SdkToolDefinition {
+  const getAvailableSkillNames = () =>
+    getInvocableSkills(skills)
+      .map((skill) => skill.name)
+      .join(', ');
+
+  return {
+    name: 'Skill',
+    description:
+      'Execute a skill within the current conversation. ' +
+      'Skills provide specialized capabilities and domain knowledge. ' +
+      'Use this tool with the skill name and optional arguments. ' +
+      'Available skills are listed in system-reminder messages.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        skill: {
+          type: 'string',
+          description:
+            'The skill name to execute (e.g., "commit", "review", "simplify")',
+        },
+        args: {
+          type: 'string',
+          description: 'Optional arguments for the skill',
+        },
+      },
+      required: ['skill'],
+    },
+    isReadOnly: () => false,
+    isConcurrencySafe: () => false,
+    isEnabled: () => getInvocableSkills(skills).length > 0,
+    async prompt() {
+      const invocable = getInvocableSkills(skills);
+      if (invocable.length === 0) return '';
+
+      const lines = invocable.map((skill) => {
+        const description =
+          skill.description.length > 200
+            ? `${skill.description.slice(0, 200)}...`
+            : skill.description;
+        return `- ${skill.name}: ${description}`;
+      });
+
+      return (
+        'Execute a skill within the main conversation.\n\n' +
+        `Available skills:\n${lines.join('\n')}\n\n` +
+        "When a skill matches the user's request, invoke it using the Skill tool."
+      );
+    },
+    async call(input, context) {
+      const skillName = String(input?.skill || '');
+      const args = String(input?.args || '');
+
+      if (!skillName) {
+        return {
+          type: 'tool_result',
+          tool_use_id: '',
+          content: 'Error: skill name is required',
+          is_error: true,
+        };
+      }
+
+      const skill = findScopedSkill(skills, skillName);
+      if (!skill) {
+        return {
+          type: 'tool_result',
+          tool_use_id: '',
+          content: `Error: Unknown skill "${skillName}". Available skills: ${getAvailableSkillNames() || 'none'}`,
+          is_error: true,
+        };
+      }
+
+      if (skill.isEnabled && !skill.isEnabled()) {
+        return {
+          type: 'tool_result',
+          tool_use_id: '',
+          content: `Error: Skill "${skillName}" is currently disabled`,
+          is_error: true,
+        };
+      }
+
+      try {
+        const contentBlocks = await skill.getPrompt(args, context);
+        const promptText = contentBlocks
+          .filter(
+            (block): block is { type: 'text'; text: string } =>
+              block.type === 'text'
+          )
+          .map((block) => block.text)
+          .join('\n\n');
+
+        const result: Record<string, unknown> = {
+          success: true,
+          commandName: skill.name,
+          status: skill.context === 'fork' ? 'forked' : 'inline',
+          prompt: promptText,
+        };
+
+        if (skill.allowedTools) {
+          result.allowedTools = skill.allowedTools;
+        }
+        if (skill.model) {
+          result.model = skill.model;
+        }
+
+        return {
+          type: 'tool_result',
+          tool_use_id: '',
+          content: JSON.stringify(result),
+        };
+      } catch (error) {
+        return {
+          type: 'tool_result',
+          tool_use_id: '',
+          content: `Error executing skill "${skillName}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          is_error: true,
+        };
+      }
+    },
+  };
+}
+
+function getCodeAnyBaseTools(
+  allowedTools?: string[],
+  scopedSkills?: SkillDefinition[]
+): SdkToolDefinition[] {
   const tools = getAllBaseTools().map((tool) =>
-    tool.name === 'WebSearch' ? ResilientWebSearchTool : tool
+    tool.name === 'WebSearch'
+      ? ResilientWebSearchTool
+      : tool.name === 'Skill' && scopedSkills
+        ? createScopedSkillTool(scopedSkills)
+        : tool
   );
   return filterTools(tools, allowedTools);
 }
@@ -270,13 +421,14 @@ export class CodeAnyAgent extends BaseAgent {
   private buildSdkOptions(
     sessionCwd: string,
     options?: AgentOptions,
-    extraOpts?: Partial<SdkAgentOptions>
+    extraOpts?: Partial<SdkAgentOptions>,
+    scopedSkills?: SkillDefinition[]
   ): SdkAgentOptions {
     const allowedTools = options?.allowedTools || ALLOWED_TOOLS;
     const sdkOpts: SdkAgentOptions = {
       cwd: sessionCwd,
       model: this.config.model,
-      tools: getCodeAnyBaseTools(allowedTools),
+      tools: getCodeAnyBaseTools(allowedTools, scopedSkills),
       permissionMode: 'bypassPermissions',
       maxTurns: 200,
       thinking: { type: 'adaptive' },
@@ -298,7 +450,7 @@ export class CodeAnyAgent extends BaseAgent {
 
     // Set allowed tools
     sdkOpts.allowedTools =
-      options?.skillsConfig?.enabled === false
+      options?.skillsConfig?.enabled === false || scopedSkills?.length === 0
         ? allowedTools.filter((tool) => tool !== 'Skill')
         : allowedTools;
 
@@ -311,10 +463,10 @@ export class CodeAnyAgent extends BaseAgent {
   }
 
   private async buildSkillsSystemPrompt(
-    options?: AgentOptions
+    options: AgentOptions | undefined,
+    scopedSkills: SkillDefinition[]
   ): Promise<string> {
     if (options?.skillsConfig?.enabled === false) {
-      await syncSdkSkills(options.skillsConfig);
       return '';
     }
 
@@ -323,15 +475,14 @@ export class CodeAnyAgent extends BaseAgent {
       return '';
     }
 
-    const fileSkills = await syncSdkSkills(options?.skillsConfig);
-    const skillsPrompt = formatSkillsForPrompt(500000);
+    const skillsPrompt = formatScopedSkillsForPrompt(scopedSkills, 500000);
     if (!skillsPrompt) {
       logger.info('[CodeAnyAgent] No invocable skills registered');
       return '';
     }
 
     logger.info(
-      `[CodeAnyAgent] Skills ready: ${fileSkills.length} file skill(s)`
+      `[CodeAnyAgent] Skills ready: ${scopedSkills.length} scoped skill(s)`
     );
 
     return [
@@ -344,15 +495,15 @@ export class CodeAnyAgent extends BaseAgent {
   private async resolveSlashSkillPrompt(
     prompt: string,
     sessionCwd: string,
-    options?: AgentOptions
+    options: AgentOptions | undefined,
+    scopedSkills: SkillDefinition[]
   ): Promise<SlashSkillResolution> {
     const invocation = parseSlashSkillInvocation(prompt);
     if (!invocation || options?.skillsConfig?.enabled === false) {
       return { prompt };
     }
 
-    await syncSdkSkills(options?.skillsConfig);
-    const skill = getSkill(invocation.name);
+    const skill = findScopedSkill(scopedSkills, invocation.name);
     if (!skill || (skill.isEnabled && !skill.isEnabled())) {
       return { prompt };
     }
@@ -626,10 +777,14 @@ User's request (answer this AFTER reading the images):
       }
     }
 
+    const scopedSkills = await loadScopedSkillDefinitions(
+      options?.skillsConfig
+    );
     const slashSkillResolution = await this.resolveSlashSkillPrompt(
       prompt,
       sessionCwd,
-      options
+      options,
+      scopedSkills
     );
     const effectivePrompt = slashSkillResolution.prompt;
     const conversationContext = this.formatConversationHistory(
@@ -657,9 +812,14 @@ User's request (answer this AFTER reading the images):
       options?.mcpConfig as McpConfig | undefined
     );
 
-    const sdkOpts = this.buildSdkOptions(sessionCwd, options, {
-      abortController: options?.abortController || session.abortController,
-    });
+    const sdkOpts = this.buildSdkOptions(
+      sessionCwd,
+      options,
+      {
+        abortController: options?.abortController || session.abortController,
+      },
+      scopedSkills
+    );
 
     // Add MCP servers if any
     if (Object.keys(userMcpServers).length > 0) {
@@ -704,7 +864,10 @@ User's request (answer this AFTER reading the images):
           };
         }
 
-        const skillsSystemPrompt = await this.buildSkillsSystemPrompt(options);
+        const skillsSystemPrompt = await this.buildSkillsSystemPrompt(
+          options,
+          scopedSkills
+        );
         const queryOverrides: Partial<SdkAgentOptions> | undefined =
           skillsSystemPrompt
             ? { appendSystemPrompt: skillsSystemPrompt }
@@ -895,14 +1058,20 @@ User's request (answer this AFTER reading the images):
 
     const sentTextHashes = new Set<string>();
     const sentToolIds = new Set<string>();
+    const scopedSkills = await loadScopedSkillDefinitions(options.skillsConfig);
 
     const userMcpServers = await loadMcpServers(
       options.mcpConfig as McpConfig | undefined
     );
 
-    const sdkOpts = this.buildSdkOptions(sessionCwd, options, {
-      abortController: options.abortController || session.abortController,
-    });
+    const sdkOpts = this.buildSdkOptions(
+      sessionCwd,
+      options,
+      {
+        abortController: options.abortController || session.abortController,
+      },
+      scopedSkills
+    );
 
     if (Object.keys(userMcpServers).length > 0) {
       sdkOpts.mcpServers = userMcpServers;
@@ -911,7 +1080,10 @@ User's request (answer this AFTER reading the images):
     try {
       const sdkAgent = createSdkAgent(sdkOpts);
       try {
-        const skillsSystemPrompt = await this.buildSkillsSystemPrompt(options);
+        const skillsSystemPrompt = await this.buildSkillsSystemPrompt(
+          options,
+          scopedSkills
+        );
         const queryOverrides: Partial<SdkAgentOptions> | undefined =
           skillsSystemPrompt
             ? { appendSystemPrompt: skillsSystemPrompt }

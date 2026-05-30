@@ -13,6 +13,7 @@ import fs from 'fs/promises';
 import { homedir } from 'os';
 import { basename, dirname, join } from 'path';
 import {
+  getAllSkills,
   getSkill,
   initBundledSkills,
   registerSkill,
@@ -55,6 +56,7 @@ export interface SkillsConfig {
   userDirEnabled?: boolean;
   appDirEnabled?: boolean;
   skillsPath?: string;
+  includeSkills?: string[];
 }
 
 const registeredFileSkillNames = new Set<string>();
@@ -142,6 +144,17 @@ function parseYamlBoolean(
   if (/^(true|yes|1)$/i.test(value)) return true;
   if (/^(false|no|0)$/i.test(value)) return false;
   return undefined;
+}
+
+function createNameAllowList(names?: string[]): Set<string> | undefined {
+  if (!names) return undefined;
+  return new Set(
+    names.map((name) => name.trim().toLowerCase()).filter(Boolean)
+  );
+}
+
+function isNameAllowed(name: string, allowList?: Set<string>): boolean {
+  return !allowList || allowList.has(name.trim().toLowerCase());
 }
 
 /**
@@ -246,6 +259,12 @@ export async function loadSkills(
 
   const skills: LoadedSkill[] = [];
   const skillsDir = getClaudeSkillsDir();
+  const allowedSkillNames = createNameAllowList(skillsConfig?.includeSkills);
+
+  if (skillsConfig?.includeSkills && allowedSkillNames?.size === 0) {
+    console.log('[Skills] Empty includeSkills scope, skipping load');
+    return [];
+  }
 
   try {
     await fs.access(skillsDir);
@@ -260,7 +279,7 @@ export async function loadSkills(
       if (entry.isDirectory()) {
         const skillDir = join(skillsDir, entry.name);
         const skill = await loadSkillFromDir(skillDir);
-        if (skill) {
+        if (skill && isNameAllowed(skill.name, allowedSkillNames)) {
           skills.push(skill);
           console.log(`[Skills] Loaded skill: ${skill.name}`);
         }
@@ -466,6 +485,12 @@ export async function loadAllSkills(
   const skills: LoadedSkill[] = [];
   const dirs = getConfiguredSkillsDirs(skillsConfig);
   const loadedNames = new Set<string>();
+  const allowedSkillNames = createNameAllowList(skillsConfig?.includeSkills);
+
+  if (skillsConfig?.includeSkills && allowedSkillNames?.size === 0) {
+    console.log('[Skills] Empty includeSkills scope, skipping load');
+    return [];
+  }
 
   for (const skillsDir of dirs) {
     try {
@@ -478,7 +503,12 @@ export async function loadAllSkills(
         const skillDir = join(skillsDir, entry.name);
         const skill = await loadSkillFromDir(skillDir);
         const normalizedName = skill?.name.toLowerCase();
-        if (skill && normalizedName && !loadedNames.has(normalizedName)) {
+        if (
+          skill &&
+          normalizedName &&
+          isNameAllowed(skill.name, allowedSkillNames) &&
+          !loadedNames.has(normalizedName)
+        ) {
           skills.push(skill);
           loadedNames.add(normalizedName);
           console.log(`[Skills] Loaded skill: ${skill.name} from ${skillsDir}`);
@@ -530,6 +560,97 @@ function toSdkSkillDefinition(skill: LoadedSkill): SkillDefinition {
       ];
     },
   };
+}
+
+function isSdkSkillAllowed(
+  skill: SkillDefinition,
+  allowList?: Set<string>
+): boolean {
+  if (!allowList) return true;
+  if (allowList.has(skill.name.trim().toLowerCase())) return true;
+  return (
+    skill.aliases?.some((alias) => allowList.has(alias.trim().toLowerCase())) ??
+    false
+  );
+}
+
+function isInvocableSkill(skill: SkillDefinition): boolean {
+  return (
+    skill.userInvocable !== false && (!skill.isEnabled || skill.isEnabled())
+  );
+}
+
+/**
+ * Load Skill definitions for one agent run without mutating the SDK global
+ * registry. Built-in SDK skills are read from the registry, while file-based
+ * skills are converted to definitions in memory so concurrent runs can keep
+ * independent includeSkills scopes.
+ */
+export async function loadScopedSkillDefinitions(
+  skillsConfig?: SkillsConfig
+): Promise<SkillDefinition[]> {
+  clearRegisteredFileSkills();
+  initBundledSkills();
+
+  if (skillsConfig && !skillsConfig.enabled) {
+    return [];
+  }
+
+  const allowedSkillNames = createNameAllowList(skillsConfig?.includeSkills);
+  if (skillsConfig?.includeSkills && allowedSkillNames?.size === 0) {
+    return [];
+  }
+
+  const definitions = new Map<string, SkillDefinition>();
+
+  for (const skill of getAllSkills()) {
+    if (isSdkSkillAllowed(skill, allowedSkillNames)) {
+      definitions.set(skill.name, skill);
+    }
+  }
+
+  for (const skill of await loadAllSkills(skillsConfig)) {
+    definitions.set(skill.name, toSdkSkillDefinition(skill));
+  }
+
+  return Array.from(definitions.values());
+}
+
+/**
+ * Format an in-memory Skill list for system prompt injection without reading
+ * from the SDK global registry.
+ */
+export function formatScopedSkillsForPrompt(
+  skills: SkillDefinition[],
+  contextWindowTokens?: number
+): string {
+  const invocable = skills.filter(isInvocableSkill);
+  if (invocable.length === 0) return '';
+
+  const charsPerToken = 4;
+  const defaultBudget = 8000;
+  const maxDescriptionChars = 250;
+  const budget = contextWindowTokens
+    ? Math.floor(contextWindowTokens * 0.01 * charsPerToken)
+    : defaultBudget;
+
+  const lines: string[] = [];
+  let used = 0;
+
+  for (const skill of invocable) {
+    const description =
+      skill.description.length > maxDescriptionChars
+        ? `${skill.description.slice(0, maxDescriptionChars)}...`
+        : skill.description;
+    const trigger = skill.whenToUse ? ` TRIGGER when: ${skill.whenToUse}` : '';
+    const line = `- ${skill.name}: ${description}${trigger}`;
+
+    if (used + line.length > budget) break;
+    lines.push(line);
+    used += line.length;
+  }
+
+  return lines.join('\n');
 }
 
 function clearRegisteredFileSkills(): void {

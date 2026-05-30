@@ -58,6 +58,7 @@ export interface SkillsConfigRequest {
   userDirEnabled: boolean;
   appDirEnabled: boolean;
   skillsPath?: string;
+  includeSkills?: string[];
 }
 
 /**

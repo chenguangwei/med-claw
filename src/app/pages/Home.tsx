@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  ASSISTANT_PROFILES_CHANGED_EVENT,
+  buildAssistantExecutionScope as buildProfileExecutionScope,
+  createPrimaryAssistantProfile,
+  loadCustomAssistantProfiles,
+  type AssistantProfile,
+} from '@/shared/assistants/profiles';
+import {
+  shouldActivateSalesDemo,
+  type CapabilitySelectionSource,
+} from '@/shared/assistants/routing';
+import {
   createSession,
   deleteTask,
   getAllTasks,
@@ -147,33 +158,44 @@ type MockDetail =
     };
 
 interface AssistantSelectionEventDetail {
+  assistant?: AssistantProfile;
+  executionScope?: AgentExecutionScope;
   capabilityId?: string | null;
-  skills?: string[];
-  mcps?: string[];
+  assistantId?: string;
+  assistantName?: string;
+  prompt?: string;
+  skillNames?: string[];
   mcpServerNames?: string[];
 }
 
-function buildAssistantExecutionScope(
+function buildAssistantExecutionScopeFromEvent(
   detail?: AssistantSelectionEventDetail
 ): AgentExecutionScope | undefined {
-  const skillNames = detail?.skills?.filter(Boolean) || [];
-  const mcps = detail?.mcps?.filter(Boolean) || [];
+  if (detail?.executionScope) return detail.executionScope;
+  if (detail?.assistant) return buildProfileExecutionScope(detail.assistant);
+
+  const skillNames = detail?.skillNames?.filter(Boolean) || [];
   const mcpServerNames = detail?.mcpServerNames?.filter(Boolean) || [];
 
   if (
+    !detail?.assistantId &&
+    !detail?.assistantName &&
+    !detail?.prompt &&
     skillNames.length === 0 &&
-    mcps.length === 0 &&
     mcpServerNames.length === 0
   ) {
     return undefined;
   }
 
   const instructionParts: string[] = [];
+  if (detail?.assistantName) {
+    instructionParts.push(`当前助手：${detail.assistantName}`);
+  }
+  if (detail?.prompt) {
+    instructionParts.push(detail.prompt);
+  }
   if (skillNames.length > 0) {
     instructionParts.push(`已选 Skills：${skillNames.join('、')}`);
-  }
-  if (mcps.length > 0) {
-    instructionParts.push(`已选 AI/MCP 能力：${mcps.join('、')}`);
   }
   if (mcpServerNames.length > 0) {
     instructionParts.push(
@@ -182,6 +204,8 @@ function buildAssistantExecutionScope(
   }
 
   return {
+    assistantIds: detail?.assistantId ? [detail.assistantId] : undefined,
+    assistantNames: detail?.assistantName ? [detail.assistantName] : undefined,
     skillNames,
     mcpServerNames,
     instruction: `使用当前助手配置。${instructionParts.join('；')}。`,
@@ -198,6 +222,18 @@ function mergeExecutionScopes(
   const skillNames = Array.from(
     new Set([...(primary.skillNames || []), ...(secondary.skillNames || [])])
   );
+  const assistantIds = Array.from(
+    new Set([
+      ...(primary.assistantIds || []),
+      ...(secondary.assistantIds || []),
+    ])
+  );
+  const assistantNames = Array.from(
+    new Set([
+      ...(primary.assistantNames || []),
+      ...(secondary.assistantNames || []),
+    ])
+  );
   const mcpServerNames = Array.from(
     new Set([
       ...(primary.mcpServerNames || []),
@@ -209,8 +245,25 @@ function mergeExecutionScopes(
     .join('\n');
 
   return {
-    skillNames,
-    mcpServerNames,
+    assistantIds:
+      Array.isArray(primary.assistantIds) ||
+      Array.isArray(secondary.assistantIds)
+        ? assistantIds
+        : undefined,
+    assistantNames:
+      Array.isArray(primary.assistantNames) ||
+      Array.isArray(secondary.assistantNames)
+        ? assistantNames
+        : undefined,
+    skillNames:
+      Array.isArray(primary.skillNames) || Array.isArray(secondary.skillNames)
+        ? skillNames
+        : undefined,
+    mcpServerNames:
+      Array.isArray(primary.mcpServerNames) ||
+      Array.isArray(secondary.mcpServerNames)
+        ? mcpServerNames
+        : undefined,
     instruction,
   };
 }
@@ -450,7 +503,7 @@ const customerPolicyDemoPrompt =
   '客户、保单信息咨询：帮我查一下客户李明的保单状态。';
 
 function normalizeMockPrompt(text: string) {
-  return text.replace(/^使用以下能力：销售助手。\s*/u, '').trim();
+  return text.replace(/^使用以下能力：(?:销售演示|销售助手)。\s*/u, '').trim();
 }
 
 function getSalesDemoStepIndexForPrompt(prompt: string) {
@@ -497,13 +550,21 @@ function getCollaborationAssistant(assistantId: CollaborationAssistant['id']) {
   );
 }
 
+function hasExactAssistantMention(prompt: string, assistantName: string) {
+  const escapedName = assistantName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `(^|\\s)@${escapedName}(?=$|[\\s，。,.!?！？、:：；;])`,
+    'u'
+  ).test(prompt);
+}
+
 function getCollaborationTargets(
   prompt: string,
   participantIds: CollaborationAssistant['id'][]
 ) {
   const mentioned = participantIds.filter((assistantId) => {
     const assistant = getCollaborationAssistant(assistantId);
-    return assistant ? prompt.includes(`@${assistant.name}`) : false;
+    return assistant ? hasExactAssistantMention(prompt, assistant.name) : false;
   });
 
   if (mentioned.length > 0) return mentioned;
@@ -616,10 +677,16 @@ function HomeContent() {
   const [activeCategory, setActiveCategory] = useState<CategoryKey | null>(
     null
   );
-  const [salesAssistantActive, setSalesAssistantActive] = useState(false);
+  const [salesDemoActive, setSalesDemoActive] = useState(false);
   const [assistantExecutionScope, setAssistantExecutionScope] = useState<
     AgentExecutionScope | undefined
   >(undefined);
+  const [assistantProfiles, setAssistantProfiles] = useState<
+    AssistantProfile[]
+  >(() => [
+    createPrimaryAssistantProfile(t.nav.primaryAssistant),
+    ...loadCustomAssistantProfiles(),
+  ]);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState<
     string | null
   >(null);
@@ -658,6 +725,15 @@ function HomeContent() {
       label: assistant.name,
       description: assistant.description,
       icon: assistant.Icon,
+    }));
+  const assistantMentionOptions: MentionOption[] = assistantProfiles
+    .filter((assistant) => assistant.id !== 'primary')
+    .map((assistant) => ({
+      id: assistant.id,
+      label: assistant.name,
+      description: assistant.description || assistant.prompt,
+      icon: Bot,
+      executionScope: buildProfileExecutionScope(assistant),
     }));
 
   useEffect(() => {
@@ -729,7 +805,7 @@ function HomeContent() {
 
   const startCollaborationSession = useCallback(() => {
     setCollaborationActive(true);
-    setSalesAssistantActive(false);
+    setSalesDemoActive(false);
     setAssistantExecutionScope(undefined);
     setSelectedCapabilityId(null);
     setActiveCategory(null);
@@ -744,7 +820,7 @@ function HomeContent() {
     setCollaborationAssistantIds(defaultCollaborationAssistantIds);
     setAvailableCollaborationPeers(initialCollaborationPeers);
     setCollaborationPeerIds(defaultCollaborationPeerIds);
-    setSalesAssistantActive(false);
+    setSalesDemoActive(false);
     setAssistantExecutionScope(undefined);
     setSelectedCapabilityId(null);
     setActiveCategory(null);
@@ -754,15 +830,20 @@ function HomeContent() {
   }, [resetSalesDemo]);
 
   const handleCapabilitySelect = useCallback(
-    (capabilityId: string | null) => {
+    (
+      capabilityId: string | null,
+      source: CapabilitySelectionSource = 'capability-chip'
+    ) => {
       setCollaborationActive(false);
       setAssistantExecutionScope(undefined);
-      setSelectedCapabilityId(capabilityId);
-      const isSales = capabilityId === 'sales';
-      setSalesAssistantActive(isSales);
+      const shouldRunSalesDemo = shouldActivateSalesDemo(capabilityId, source);
+      setSelectedCapabilityId(
+        source === 'capability-chip' ? capabilityId : null
+      );
+      setSalesDemoActive(shouldRunSalesDemo);
       setActiveCategory(null);
 
-      if (!isSales) {
+      if (!shouldRunSalesDemo) {
         resetSalesDemo();
       }
     },
@@ -770,11 +851,35 @@ function HomeContent() {
   );
 
   useEffect(() => {
+    const handleProfilesChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ assistants?: AssistantProfile[] }>)
+        .detail;
+      if (Array.isArray(detail?.assistants)) {
+        setAssistantProfiles(detail.assistants);
+      }
+    };
+
+    window.addEventListener(
+      ASSISTANT_PROFILES_CHANGED_EVENT,
+      handleProfilesChanged
+    );
+    return () => {
+      window.removeEventListener(
+        ASSISTANT_PROFILES_CHANGED_EVENT,
+        handleProfilesChanged
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     const handleAssistantSelection = (event: Event) => {
       const detail = (event as CustomEvent<AssistantSelectionEventDetail>)
         .detail;
-      handleCapabilitySelect(detail?.capabilityId ?? null);
-      setAssistantExecutionScope(buildAssistantExecutionScope(detail));
+      handleCapabilitySelect(
+        detail?.capabilityId ?? null,
+        'assistant-selection'
+      );
+      setAssistantExecutionScope(buildAssistantExecutionScopeFromEvent(detail));
     };
 
     window.addEventListener(
@@ -805,7 +910,7 @@ function HomeContent() {
 
   const handleInputActivate = useCallback(() => {
     if (
-      !salesAssistantActive ||
+      !salesDemoActive ||
       demoRunning ||
       demoCompleted ||
       pendingPrompt ||
@@ -820,7 +925,7 @@ function HomeContent() {
     demoRunning,
     nextDemoStep,
     pendingPrompt,
-    salesAssistantActive,
+    salesDemoActive,
   ]);
 
   const streamMockAssistant = useCallback(
@@ -914,7 +1019,7 @@ function HomeContent() {
   const handleCategoryClick = (key: CategoryKey) => {
     setActiveCategory((prev) => (prev === key ? null : key));
     setCollaborationActive(false);
-    setSalesAssistantActive(false);
+    setSalesDemoActive(false);
     setAssistantExecutionScope(undefined);
     setSelectedCapabilityId(null);
     resetSalesDemo();
@@ -1087,7 +1192,7 @@ function HomeContent() {
       return;
     }
 
-    if (salesAssistantActive) {
+    if (salesDemoActive) {
       if (demoRunning) return;
 
       const runId = demoRunRef.current + 1;
@@ -1159,11 +1264,11 @@ function HomeContent() {
       return '在协作群里安排任务，可 @销售助手、@会议助手，也可指定成员负责人';
     }
 
-    if (salesAssistantActive && demoCompleted) {
+    if (salesDemoActive && demoCompleted) {
       return '本轮咨询已完成，可继续输入新的业务问题';
     }
 
-    if (salesAssistantActive) {
+    if (salesDemoActive) {
       return '请输入产品、核保、保单或系统操作相关问题';
     }
 
@@ -1172,7 +1277,7 @@ function HomeContent() {
     activeCategoryData?.placeholder,
     collaborationActive,
     demoCompleted,
-    salesAssistantActive,
+    salesDemoActive,
     t.home.inputPlaceholder,
   ]);
 
@@ -1183,16 +1288,18 @@ function HomeContent() {
       isRunning={demoRunning || collaborationRunning}
       onSubmit={handleSubmit}
       className="w-full"
-      autoFocus={!salesAssistantActive}
+      autoFocus={!salesDemoActive}
       externalValue={pendingPrompt}
       onExternalValueConsumed={handlePendingConsumed}
       onCapabilitySelect={handleCapabilitySelect}
       selectedCapabilityId={selectedCapabilityId}
       onInputActivate={handleInputActivate}
-      preserveCapabilitiesOnSubmit={salesAssistantActive}
+      preserveCapabilitiesOnSubmit={salesDemoActive}
       showCapabilities={!collaborationActive}
       mentionOptions={
-        collaborationActive ? collaborationMentionOptions : undefined
+        collaborationActive
+          ? collaborationMentionOptions
+          : assistantMentionOptions
       }
       categoryTag={
         activeCategory && activeCategoryData
@@ -1258,7 +1365,7 @@ function HomeContent() {
               </CollaborationStartPanel>
             ) : (
               <>
-                {salesAssistantActive && !hasDemoConversation && (
+                {salesDemoActive && !hasDemoConversation && (
                   <SalesAssistantFaqPanel
                     completed={demoCompleted}
                     onPromptClick={handlePromptClick}
@@ -1284,7 +1391,7 @@ function HomeContent() {
                 {chatInput}
 
                 {/* Category Buttons / Prompt List */}
-                {salesAssistantActive ? null : activeCategory &&
+                {salesDemoActive ? null : activeCategory &&
                   activeCategoryData ? (
                   /* Expanded: show prompts for selected category */
                   <div className="w-full">
@@ -1581,10 +1688,10 @@ function SalesAssistantFaqPanel({
           </span>
           <div className="min-w-0">
             <h2 className="text-foreground truncate text-sm font-semibold">
-              销售助手常见问题
+              销售演示常见问题
             </h2>
             <p className="text-muted-foreground mt-0.5 text-xs">
-              保险销售端人员使用
+              使用 mock 业务数据展示保险销售流程
             </p>
           </div>
         </div>
@@ -1605,8 +1712,7 @@ function SalesAssistantFaqPanel({
         <span className="min-w-0">
           <span className="block font-semibold">模拟客户/保单查询</span>
           <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            自动填入客户李明保单状态咨询，发送后展示
-            Agent、Skill、工具和知识库流程
+            自动填入客户李明保单状态咨询，发送后展示演示流程
           </span>
         </span>
         <ArrowUpRight className="text-muted-foreground size-4 shrink-0" />

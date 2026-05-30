@@ -430,12 +430,13 @@ function getSandboxConfig():
 }
 
 // Helper to get skills configuration from settings
-function getSkillsConfig():
+function getSkillsConfig(executionScope?: AgentExecutionScope):
   | {
       enabled: boolean;
       userDirEnabled: boolean;
       appDirEnabled: boolean;
       skillsPath?: string;
+      includeSkills?: string[];
     }
   | undefined {
   try {
@@ -448,15 +449,28 @@ function getSkillsConfig():
         userDirEnabled: false,
         appDirEnabled: false,
         skillsPath: settings.skillsPath || undefined,
+        includeSkills: Array.isArray(executionScope?.skillNames)
+          ? executionScope.skillNames
+          : undefined,
       };
     }
 
-    const config = {
+    const config: {
+      enabled: boolean;
+      userDirEnabled: boolean;
+      appDirEnabled: boolean;
+      skillsPath?: string;
+      includeSkills?: string[];
+    } = {
       enabled: true,
       userDirEnabled: settings.skillsUserDirEnabled !== false,
       appDirEnabled: settings.skillsAppDirEnabled !== false,
       skillsPath: settings.skillsPath || undefined,
     };
+
+    if (Array.isArray(executionScope?.skillNames)) {
+      config.includeSkills = executionScope.skillNames;
+    }
 
     console.log('[useAgent] Skills config:', config);
     return config;
@@ -501,7 +515,7 @@ function getMcpConfig(executionScope?: AgentExecutionScope):
       mcpConfigPath: settings.mcpConfigPath || undefined,
     };
 
-    if (executionScope?.mcpServerNames?.length) {
+    if (Array.isArray(executionScope?.mcpServerNames)) {
       config.includeServers = executionScope.mcpServerNames;
     }
 
@@ -551,12 +565,27 @@ export interface MessageAttachment {
 }
 
 export interface AgentExecutionScope {
+  /** IDs of assistant profiles activated for this run. */
+  assistantIds?: string[];
+  /** Names of assistant profiles activated for this run. */
+  assistantNames?: string[];
   /** Names of selected skills, used for prompt steering. */
   skillNames?: string[];
   /** Real MCP server names to mount for this run. */
   mcpServerNames?: string[];
   /** User-visible assistant scope instruction to prepend to the prompt. */
   instruction?: string;
+}
+
+function hasExecutionScope(scope?: AgentExecutionScope): boolean {
+  return !!(
+    scope &&
+    (scope.instruction ||
+      Array.isArray(scope.assistantIds) ||
+      Array.isArray(scope.assistantNames) ||
+      Array.isArray(scope.skillNames) ||
+      Array.isArray(scope.mcpServerNames))
+  );
 }
 
 export interface AgentMessage {
@@ -2102,8 +2131,7 @@ export function useAgent(): UseAgentReturn {
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
-          !executionScope?.instruction &&
-          !executionScope?.mcpServerNames?.length &&
+          !hasExecutionScope(executionScope) &&
           !isSlashCommand(prompt) &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(prompt)));
@@ -2227,7 +2255,7 @@ export function useAgent(): UseAgentReturn {
           mode === 'task' ||
           hasImages ||
           isSlashCommand(prompt) ||
-          !!executionScope?.mcpServerNames?.length;
+          hasExecutionScope(executionScope);
         if (shouldUseDirectAgent) {
           console.log('[useAgent] Using direct execution', {
             mode,
@@ -2276,7 +2304,7 @@ export function useAgent(): UseAgentReturn {
           // Use session folder as workDir
           const workDir = computedSessionFolder || (await getAppDataDir());
           const sandboxConfig = getSandboxConfig();
-          const skillsConfig = getSkillsConfig();
+          const skillsConfig = getSkillsConfig(executionScope);
           const language = getPreferredLanguage();
 
           const mcpConfig = getMcpConfig(executionScope);
@@ -2544,7 +2572,7 @@ export function useAgent(): UseAgentReturn {
       }
       const modelConfig = getModelConfig();
       const sandboxConfig = getSandboxConfig();
-      const skillsConfig = getSkillsConfig();
+      const skillsConfig = getSkillsConfig(executionScopeRef.current);
       const mcpConfig = getMcpConfig(executionScopeRef.current);
       const language = getPreferredLanguage();
       const scopedInitialPrompt = executionScopeRef.current?.instruction
@@ -2784,7 +2812,7 @@ export function useAgent(): UseAgentReturn {
         }
         const modelConfig = getModelConfig();
         const sandboxConfig = getSandboxConfig();
-        const skillsConfig = getSkillsConfig();
+        const skillsConfig = getSkillsConfig(currentExecutionScope);
         const mcpConfig = getMcpConfig(currentExecutionScope);
 
         // Prepare images for API (only send image attachments with actual data)
@@ -2818,8 +2846,7 @@ export function useAgent(): UseAgentReturn {
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
-          !currentExecutionScope?.instruction &&
-          !currentExecutionScope?.mcpServerNames?.length &&
+          !hasExecutionScope(currentExecutionScope) &&
           !isSlashCommand(reply) &&
           (mode === 'chat' ||
             (mode !== 'task' && !hasImages && isFastChatQuery(reply)));

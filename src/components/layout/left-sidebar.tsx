@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  buildAssistantExecutionScope,
+  createPrimaryAssistantProfile,
+  dispatchAssistantProfilesChanged,
+  getInitial,
+  loadCustomAssistantProfiles,
+  saveCustomAssistantProfiles,
+  type AssistantProfile,
+} from '@/shared/assistants/profiles';
+import {
   getAllFiles,
   type FileType,
   type LibraryFile,
@@ -114,19 +123,7 @@ interface LeftSidebarProps {
   runningTaskIds?: string[];
 }
 
-interface SidebarAssistant {
-  id: string;
-  name: string;
-  initial: string;
-  capabilityId?: string | null;
-  source?: 'primary' | 'built-in' | 'custom';
-  description?: string;
-  skills?: string[];
-  mcps?: string[];
-  mcpServerNames?: string[];
-}
-
-const CUSTOM_ASSISTANTS_STORAGE_KEY = 'uniins-claw:custom-assistants';
+type SidebarAssistant = AssistantProfile;
 
 const BUILT_IN_ASSISTANTS = [
   {
@@ -135,6 +132,8 @@ const BUILT_IN_ASSISTANTS = [
     capabilityId: 'sales',
     icon: BadgeDollarSign,
     description: '产品条款、产品比对、渠道推荐、核保和保单查询。',
+    prompt:
+      '你是销售助手，负责保险产品咨询、条款解释、产品对比、核保材料判断和保单查询任务。回答要贴近业务场景，先确认客户目标，再给出可执行建议。',
   },
   {
     id: 'meeting',
@@ -142,6 +141,8 @@ const BUILT_IN_ASSISTANTS = [
     capabilityId: 'meeting',
     icon: Calendar,
     description: '会议纪要、待办提炼、日程梳理和参会材料整理。',
+    prompt:
+      '你是会议助手，负责整理会议材料、提炼决议和待办、梳理日程与参会上下文。输出要清晰区分结论、责任人和下一步。',
   },
   {
     id: 'office',
@@ -149,6 +150,8 @@ const BUILT_IN_ASSISTANTS = [
     capabilityId: 'office',
     icon: BriefcaseBusiness,
     description: '日常办公写作、表格处理、流程材料和事务跟进。',
+    prompt:
+      '你是办公助手，负责日常写作、表格整理、流程材料和事务跟进。输出要正式、准确、便于直接复用。',
   },
   {
     id: 'document-review',
@@ -156,6 +159,8 @@ const BUILT_IN_ASSISTANTS = [
     capabilityId: 'document-review',
     icon: ShieldCheck,
     description: '合同、方案、制度和业务文档的风险与格式审核。',
+    prompt:
+      '你是文档审核助手，负责检查合同、方案、制度和业务文档中的风险、遗漏、格式和表达问题。请给出具体问题和修改建议。',
   },
   {
     id: 'file',
@@ -163,41 +168,19 @@ const BUILT_IN_ASSISTANTS = [
     capabilityId: null,
     icon: FolderOpen,
     description: '文件归类、命名整理、资料检索和归档建议。',
+    prompt:
+      '你是文件整理助手，负责文件归类、命名规范、资料检索和归档建议。处理文件时先说明分类依据，再给出可执行步骤。',
   },
 ] as const;
 
-const ASSISTANT_SKILL_OPTIONS = [
-  {
-    id: 'terms',
-    label: '条款检索',
-    description: '读取产品条款并抽取责任、等待期和免赔额。',
-  },
-  {
-    id: 'compare',
-    label: '产品比对',
-    description: '按保障责任、适用客群和销售口径做结构化对比。',
-  },
-  {
-    id: 'writing',
-    label: '话术生成',
-    description: '把业务规则转换成可直接发送给客户的表达。',
-  },
-  {
-    id: 'review',
-    label: '文档审核',
-    description: '检查文档风险、遗漏项和格式一致性。',
-  },
-  {
-    id: 'underwriting',
-    label: '核保咨询',
-    description: '识别健康告知、异常指标和需补充的核保材料。',
-  },
-  {
-    id: 'ops-support',
-    label: '运维排障',
-    description: '梳理系统报错、权限问题和工单处理上下文。',
-  },
-] as const;
+interface AssistantSkillOption {
+  id: string;
+  label: string;
+  description: string;
+  skillName: string;
+  source: 'claude' | 'uniins-claw' | 'custom';
+  enabled: boolean;
+}
 
 interface AssistantMcpOption {
   id: string;
@@ -205,39 +188,6 @@ interface AssistantMcpOption {
   description: string;
   serverName?: string;
 }
-
-const ASSISTANT_MCP_OPTIONS: AssistantMcpOption[] = [
-  {
-    id: 'knowledge-base',
-    label: '知识库',
-    description: '连接产品资料、销售手册和内部 FAQ。',
-  },
-  {
-    id: 'policy-system',
-    label: '保单系统',
-    description: '查询客户、保单、续保和承保状态。',
-  },
-  {
-    id: 'crm',
-    label: '客户中心',
-    description: '读取客户画像、渠道和跟进记录。',
-  },
-  {
-    id: 'ops',
-    label: '运维工单',
-    description: '创建排障工单并补充必要上下文。',
-  },
-  {
-    id: 'proposal-engine',
-    label: '建议书系统',
-    description: '生成方案建议书并校验产品、费率和投保规则。',
-  },
-  {
-    id: 'channel-product',
-    label: '渠道产品库',
-    description: '按代理人渠道读取可售、停售和权限内产品。',
-  },
-];
 
 const ASSISTANT_OPTION_PAGE_SIZE = 4;
 
@@ -254,16 +204,43 @@ function filterAssistantOptions<
   });
 }
 
+function parseAssistantSkillFrontmatter(content: string) {
+  const frontmatter = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  const yaml = frontmatter?.[1] || '';
+  const readValue = (key: string) => {
+    const match = yaml.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+    return match?.[1]?.replace(/^["']|["']$/g, '').trim() || '';
+  };
+
+  return {
+    name: readValue('name'),
+    description: readValue('description'),
+  };
+}
+
+function createAssistantPrompt(name: string) {
+  return [
+    `你是「${name}」。`,
+    '严格按该助手绑定的 Skills 和 MCP 工具工作。',
+    '先判断用户目标，再选择合适工具；没有必要调用工具时，直接回答。',
+    '输出要具体、可执行、避免泛泛建议。',
+  ].join('\n');
+}
+
 function dispatchAssistantSelection(assistant: SidebarAssistant) {
+  const executionScope = buildAssistantExecutionScope(assistant);
   window.dispatchEvent(
     new CustomEvent('uniins-claw:assistant-selected', {
       detail: {
+        assistant,
         assistantId: assistant.id,
         assistantName: assistant.name,
         capabilityId: assistant.capabilityId ?? null,
-        skills: assistant.skills ?? [],
-        mcps: assistant.mcps ?? [],
+        prompt: assistant.prompt,
+        skillNames: assistant.skillNames ?? [],
+        mcpLabels: assistant.mcpLabels ?? [],
         mcpServerNames: assistant.mcpServerNames ?? [],
+        executionScope,
       },
     })
   );
@@ -277,10 +254,6 @@ function dispatchCollaborationSessionStart() {
 
 function dispatchNewSessionStart() {
   window.dispatchEvent(new CustomEvent('uniins-claw:new-session-start'));
-}
-
-function getInitial(name: string) {
-  return name.trim().slice(0, 1).toUpperCase() || 'A';
 }
 
 async function openPathInSystem(targetPath: string) {
@@ -2769,40 +2742,23 @@ function TaskAssistantPanel({
   t: ReturnType<typeof useLanguage>['t'];
 }) {
   const [assistants, setAssistants] = useState<SidebarAssistant[]>(() => {
-    const primaryAssistant = {
-      id: 'primary',
-      name: t.nav.primaryAssistant,
-      initial: 'W',
-    };
-
-    try {
-      const saved = JSON.parse(
-        window.localStorage.getItem(CUSTOM_ASSISTANTS_STORAGE_KEY) || '[]'
-      );
-      if (!Array.isArray(saved)) return [primaryAssistant];
-
-      const customAssistants = saved.filter(
-        (assistant): assistant is SidebarAssistant =>
-          typeof assistant?.id === 'string' &&
-          typeof assistant?.name === 'string' &&
-          typeof assistant?.initial === 'string' &&
-          assistant.id !== 'primary'
-      );
-
-      return [primaryAssistant, ...customAssistants];
-    } catch {
-      return [primaryAssistant];
-    }
+    const primaryAssistant = createPrimaryAssistantProfile(
+      t.nav.primaryAssistant
+    );
+    return [primaryAssistant, ...loadCustomAssistantProfiles()];
   });
   const [activeAssistantId, setActiveAssistantId] = useState('primary');
   const [createAssistantOpen, setCreateAssistantOpen] = useState(false);
+  const [editingAssistantId, setEditingAssistantId] = useState<string | null>(
+    null
+  );
   const [assistantName, setAssistantName] = useState('');
-  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([
-    'writing',
-  ]);
-  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([
-    'knowledge-base',
-  ]);
+  const [assistantPrompt, setAssistantPrompt] = useState('');
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
+  const [configuredSkillOptions, setConfiguredSkillOptions] = useState<
+    AssistantSkillOption[]
+  >([]);
   const [configuredMcpOptions, setConfiguredMcpOptions] = useState<
     AssistantMcpOption[]
   >([]);
@@ -2816,20 +2772,13 @@ function TaskAssistantPanel({
     (assistant) => assistant.name === trimmedAssistantName
   );
   const showCustomComposer =
-    trimmedAssistantName.length > 0 && !matchedBuiltInAssistant;
+    trimmedAssistantName.length > 0 &&
+    (!matchedBuiltInAssistant || !!editingAssistantId);
   const filteredSkillOptions = filterAssistantOptions(
-    ASSISTANT_SKILL_OPTIONS,
+    configuredSkillOptions,
     skillSearchQuery
   );
-  const mcpOptions = [
-    ...configuredMcpOptions,
-    ...ASSISTANT_MCP_OPTIONS.filter(
-      (option) =>
-        !configuredMcpOptions.some(
-          (configured) => configured.label === option.label
-        )
-    ),
-  ];
+  const mcpOptions = configuredMcpOptions;
   const filteredMcpOptions = filterAssistantOptions(mcpOptions, mcpSearchQuery);
   const skillPageCount = Math.max(
     1,
@@ -2849,9 +2798,11 @@ function TaskAssistantPanel({
   );
 
   const resetCreateAssistantForm = () => {
+    setEditingAssistantId(null);
     setAssistantName('');
-    setSelectedSkillIds(['writing']);
-    setSelectedMcpIds(['knowledge-base']);
+    setAssistantPrompt('');
+    setSelectedSkillIds([]);
+    setSelectedMcpIds([]);
     setSkillPage(0);
     setMcpPage(0);
     setSkillSearchQuery('');
@@ -2859,12 +2810,14 @@ function TaskAssistantPanel({
     setAssistantNameError('');
   };
 
-  const findAssistantByName = (name: string) =>
-    assistants.find((assistant) => assistant.name === name);
-
   const validateAssistantName = (name: string) => {
     if (!name.trim()) return '请输入助手名称。';
-    if (findAssistantByName(name.trim()))
+    if (
+      assistants.some(
+        (assistant) =>
+          assistant.name === name.trim() && assistant.id !== editingAssistantId
+      )
+    )
       return '助手名称已存在，请换一个名称。';
     return '';
   };
@@ -2873,14 +2826,112 @@ function TaskAssistantPanel({
     const customAssistants = assistants.filter(
       (assistant) => assistant.id !== 'primary'
     );
-    window.localStorage.setItem(
-      CUSTOM_ASSISTANTS_STORAGE_KEY,
-      JSON.stringify(customAssistants)
-    );
+    saveCustomAssistantProfiles(customAssistants);
+    dispatchAssistantProfilesChanged(assistants);
   }, [assistants]);
 
   useEffect(() => {
     let cancelled = false;
+
+    async function loadConfiguredSkillOptions() {
+      try {
+        const dirsResponse = await fetch(`${API_BASE_URL}/files/skills-dir`);
+        const dirsData = await dirsResponse.json();
+        const nextOptions: AssistantSkillOption[] = [];
+        const seen = new Set<string>();
+
+        const loadSkillDirectory = async (
+          rootPath: string,
+          idPrefix: string,
+          source: AssistantSkillOption['source'],
+          enabled: boolean
+        ) => {
+          const filesResponse = await fetch(`${API_BASE_URL}/files/readdir`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: rootPath, maxDepth: 2 }),
+          });
+          const filesData = await filesResponse.json();
+          if (!filesData.success || !Array.isArray(filesData.files)) return;
+
+          for (const folder of filesData.files) {
+            if (!folder.isDir) continue;
+
+            let skillName = folder.name;
+            let description = `${source} Skill`;
+            try {
+              const mdResponse = await fetch(`${API_BASE_URL}/files/read`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: `${folder.path}/SKILL.md` }),
+              });
+              const mdData = await mdResponse.json();
+              if (mdData.success && mdData.content) {
+                const frontmatter = parseAssistantSkillFrontmatter(
+                  mdData.content
+                );
+                skillName = frontmatter.name || skillName;
+                description = frontmatter.description || description;
+              }
+            } catch {
+              // Directory name is good enough when metadata is unavailable.
+            }
+
+            const normalizedName = skillName.trim().toLowerCase();
+            if (!normalizedName || seen.has(normalizedName)) continue;
+            seen.add(normalizedName);
+            nextOptions.push({
+              id: `${idPrefix}-${folder.name}`,
+              label: skillName,
+              description,
+              skillName,
+              source,
+              enabled,
+            });
+          }
+        };
+
+        const defaultDirs = (dirsData.directories || []) as Array<{
+          name: string;
+          path: string;
+          exists: boolean;
+        }>;
+
+        for (const dir of defaultDirs) {
+          if (!dir.exists) continue;
+          const source = dir.name === 'claude' ? 'claude' : 'uniins-claw';
+          const enabled =
+            dir.name === 'claude'
+              ? settings.skillsUserDirEnabled !== false
+              : settings.skillsAppDirEnabled !== false;
+          await loadSkillDirectory(dir.path, dir.name, source, enabled);
+        }
+
+        if (settings.skillsPath) {
+          const isDefaultDir = defaultDirs.some(
+            (dir) => dir.path === settings.skillsPath
+          );
+          if (!isDefaultDir) {
+            await loadSkillDirectory(
+              settings.skillsPath,
+              'custom',
+              'custom',
+              settings.skillsEnabled !== false
+            );
+          }
+        }
+
+        if (!cancelled) {
+          setConfiguredSkillOptions(nextOptions);
+        }
+      } catch (error) {
+        console.error(
+          '[TaskAssistantPanel] Failed to load Skill options:',
+          error
+        );
+        if (!cancelled) setConfiguredSkillOptions([]);
+      }
+    }
 
     async function loadConfiguredMcpOptions() {
       try {
@@ -2935,6 +2986,7 @@ function TaskAssistantPanel({
       }
     }
 
+    void loadConfiguredSkillOptions();
     void loadConfiguredMcpOptions();
 
     return () => {
@@ -2949,21 +3001,17 @@ function TaskAssistantPanel({
 
   const startCollaborationSession = () => {
     setActiveAssistantId('primary');
-    dispatchAssistantSelection({
-      id: 'primary',
-      name: t.nav.primaryAssistant,
-      initial: 'W',
-    });
+    dispatchAssistantSelection(
+      createPrimaryAssistantProfile(t.nav.primaryAssistant)
+    );
     dispatchCollaborationSessionStart();
   };
 
   const startNewSession = () => {
     setActiveAssistantId('primary');
-    dispatchAssistantSelection({
-      id: 'primary',
-      name: t.nav.primaryAssistant,
-      initial: 'W',
-    });
+    dispatchAssistantSelection(
+      createPrimaryAssistantProfile(t.nav.primaryAssistant)
+    );
     dispatchNewSessionStart();
     onNewSession();
   };
@@ -2992,6 +3040,14 @@ function TaskAssistantPanel({
       capabilityId: template.capabilityId,
       source: 'built-in' as const,
       description: template.description,
+      prompt: template.prompt,
+      skillNames: [],
+      skillSources: [],
+      mcpServerNames: [],
+      skillLabels: [],
+      mcpLabels: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     addAssistant(assistant);
@@ -3005,36 +3061,61 @@ function TaskAssistantPanel({
       return;
     }
 
-    if (matchedBuiltInAssistant) {
+    if (matchedBuiltInAssistant && !editingAssistantId) {
       handleCreateBuiltInAssistant(matchedBuiltInAssistant);
       return;
     }
 
-    const skills = ASSISTANT_SKILL_OPTIONS.filter((skill) =>
+    const selectedSkills = configuredSkillOptions.filter((skill) =>
       selectedSkillIds.includes(skill.id)
-    ).map((skill) => skill.label);
+    );
+    const skillNames = selectedSkills.map((skill) => skill.skillName);
+    const skillLabels = selectedSkills.map((skill) => skill.label);
+    const skillSources = selectedSkills.map((skill) => skill.source);
     const selectedMcps = mcpOptions.filter((mcp) =>
       selectedMcpIds.includes(mcp.id)
     );
-    const mcps = selectedMcps.map((mcp) => mcp.label);
+    const mcpLabels = selectedMcps.map((mcp) => mcp.label);
     const mcpServerNames = selectedMcps
       .map((mcp) => mcp.serverName)
       .filter((name): name is string => Boolean(name));
-
-    addAssistant({
-      id: `assistant-${Date.now()}`,
+    const timestamp = new Date().toISOString();
+    const currentAssistant = editingAssistantId
+      ? assistants.find((assistant) => assistant.id === editingAssistantId)
+      : undefined;
+    const nextAssistant: SidebarAssistant = {
+      id: editingAssistantId || `assistant-${Date.now()}`,
       name: trimmed,
       initial: getInitial(trimmed),
-      capabilityId: null,
-      source: 'custom',
+      capabilityId: currentAssistant?.capabilityId ?? null,
+      source: currentAssistant?.source === 'built-in' ? 'built-in' : 'custom',
       description:
-        skills.length || mcps.length
-          ? `已配置 ${skills.length} 项技能、${mcps.length} 项 MCP 能力`
-          : '未绑定额外技能或 MCP，按通用助手创建。',
-      skills,
-      mcps,
+        skillNames.length || mcpServerNames.length
+          ? `已配置 ${skillNames.length} 项真实 Skill、${mcpServerNames.length} 个 MCP 服务`
+          : '未绑定额外 Skill 或 MCP，按该助手 Prompt 独立执行。',
+      prompt: assistantPrompt.trim() || createAssistantPrompt(trimmed),
+      skillNames,
+      skillSources,
       mcpServerNames,
-    });
+      skillLabels,
+      mcpLabels,
+      createdAt: currentAssistant?.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
+
+    if (editingAssistantId) {
+      setAssistants((current) =>
+        current.map((assistant) =>
+          assistant.id === editingAssistantId ? nextAssistant : assistant
+        )
+      );
+      activateAssistant(nextAssistant);
+      resetCreateAssistantForm();
+      setCreateAssistantOpen(false);
+      return;
+    }
+
+    addAssistant(nextAssistant);
   };
 
   const toggleSkill = (skillId: string) => {
@@ -3051,6 +3132,35 @@ function TaskAssistantPanel({
         ? current.filter((id) => id !== mcpId)
         : [...current, mcpId]
     );
+  };
+
+  const handleEditAssistant = (
+    assistant: SidebarAssistant,
+    event: React.MouseEvent
+  ) => {
+    event.stopPropagation();
+    if (assistant.id === 'primary') return;
+
+    setEditingAssistantId(assistant.id);
+    setAssistantName(assistant.name);
+    setAssistantPrompt(
+      assistant.prompt || createAssistantPrompt(assistant.name)
+    );
+    setSelectedSkillIds(
+      configuredSkillOptions
+        .filter((skill) => assistant.skillNames.includes(skill.skillName))
+        .map((skill) => skill.id)
+    );
+    setSelectedMcpIds(
+      mcpOptions
+        .filter(
+          (mcp) =>
+            mcp.serverName && assistant.mcpServerNames.includes(mcp.serverName)
+        )
+        .map((mcp) => mcp.id)
+    );
+    setAssistantNameError('');
+    setCreateAssistantOpen(true);
   };
 
   const handleDeleteAssistant = (
@@ -3155,20 +3265,35 @@ function TaskAssistantPanel({
                     </span>
                   </button>
                   {assistant.id !== 'primary' && (
-                    <button
-                      type="button"
-                      aria-label={`删除${assistant.name}`}
-                      title="删除助手"
-                      onClick={(event) =>
-                        handleDeleteAssistant(assistant, event)
-                      }
+                    <div
                       className={cn(
-                        'flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500 focus:opacity-100',
+                        'flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100',
                         active && 'opacity-100'
                       )}
                     >
-                      <Trash2 className="size-4" />
-                    </button>
+                      <button
+                        type="button"
+                        aria-label={`编辑${assistant.name}`}
+                        title="编辑助手"
+                        onClick={(event) =>
+                          handleEditAssistant(assistant, event)
+                        }
+                        className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-orange-50 hover:text-orange-600"
+                      >
+                        <Pencil className="size-4" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`删除${assistant.name}`}
+                        title="删除助手"
+                        onClick={(event) =>
+                          handleDeleteAssistant(assistant, event)
+                        }
+                        className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-500"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
                   )}
                 </div>
               );
@@ -3237,10 +3362,10 @@ function TaskAssistantPanel({
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[760px]">
           <DialogHeader>
             <DialogTitle className="text-2xl">
-              {t.nav.createAssistant}
+              {editingAssistantId ? '编辑助手' : t.nav.createAssistant}
             </DialogTitle>
             <DialogDescription>
-              创建自定义助手，并为它选择可用技能与 AI 能力范围。
+              保存助手 Prompt，并为它选择真实 Skill 与 MCP 运行范围。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 py-2">
@@ -3280,9 +3405,23 @@ function TaskAssistantPanel({
                 </p>
               )}
               <p className="text-muted-foreground mt-3 text-sm leading-6">
-                创建后会出现在“我的助手”列表中，并自动切换为当前助手。
+                保存后会出现在“我的助手”列表中，并自动切换为当前助手。
               </p>
             </div>
+
+            {showCustomComposer && (
+              <div>
+                <label className="text-sm font-semibold">助手 Prompt</label>
+                <textarea
+                  value={assistantPrompt}
+                  onChange={(event) => setAssistantPrompt(event.target.value)}
+                  placeholder={createAssistantPrompt(
+                    trimmedAssistantName || '新助手'
+                  )}
+                  className="border-border focus:border-primary focus:ring-primary/30 mt-2 min-h-28 w-full resize-y rounded-xl border bg-transparent px-4 py-3 text-sm leading-6 outline-none focus:ring-2"
+                />
+              </div>
+            )}
 
             {!showCustomComposer ? (
               <div>
