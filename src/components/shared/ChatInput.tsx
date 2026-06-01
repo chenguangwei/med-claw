@@ -25,11 +25,13 @@ import {
   Cpu,
   FileCheck2,
   FileText,
+  FolderOpen,
   MessageCircle,
   Paperclip,
   Plus,
   Search,
   Send,
+  ShieldCheck,
   Sparkles,
   Square,
   X,
@@ -60,7 +62,7 @@ export type ChatMode = 'auto' | 'chat' | 'task';
 export interface Attachment {
   id: string;
   file: File;
-  type: 'image' | 'file';
+  type: 'image' | 'file' | 'folder';
   preview?: string; // Data URL for image preview
   nativePath?: string; // Native file path from Tauri drag-drop
 }
@@ -190,6 +192,25 @@ const isImageFile = (file: File) => {
     ext || ''
   );
 };
+
+const getPathName = (path: string) => path.split(/[\\/]/).pop() || path;
+
+function hasLikelyFolderPath(text: string): boolean {
+  return /(~\/|\/[\w\u4e00-\u9fff ._-]+|[A-Za-z]:\\|\\\\)/u.test(text);
+}
+
+function needsFolderAuthorization(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || hasLikelyFolderPath(trimmed)) return false;
+
+  const hasFolderTarget = /(文件夹|目录|folder|directory)/iu.test(trimmed);
+  const hasFolderAction =
+    /(整理|读取|扫描|归档|检查|移动|重命名|organize|read|scan|archive|move|rename)/iu.test(
+      trimmed
+    );
+
+  return hasFolderTarget && hasFolderAction;
+}
 
 function stripYamlQuotes(value: string): string {
   const trimmed = value.trim();
@@ -440,6 +461,7 @@ export function ChatInput({
   const [selectedCapabilityExtensionIds, setSelectedCapabilityExtensionIds] =
     useState<string[]>([]);
   const [capabilityExtensionQuery, setCapabilityExtensionQuery] = useState('');
+  const [folderAccessWarning, setFolderAccessWarning] = useState('');
   const [highlightedSkillIndex, setHighlightedSkillIndex] = useState(0);
   const [highlightedMentionIndex, setHighlightedMentionIndex] = useState(0);
   const [textareaScrollTop, setTextareaScrollTop] = useState(0);
@@ -506,6 +528,11 @@ export function ChatInput({
   const hasMentionHighlights = mentionHighlightSegments.some(
     (segment) => segment.isMention
   );
+  const hasFolderAttachments = attachments.some(
+    (attachment) => attachment.type === 'folder'
+  );
+  const shouldSuggestFolderAccess =
+    needsFolderAuthorization(value) && !hasFolderAttachments;
 
   // Sync external value into the input
   useEffect(() => {
@@ -783,8 +810,24 @@ export function ChatInput({
 
       const newAttachments: Attachment[] = [];
       for (const filePath of paths) {
-        const name =
-          filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
+        const name = getPathName(filePath);
+
+        try {
+          const { stat } = await import('@tauri-apps/plugin-fs');
+          const info = await stat(filePath);
+          if (info.isDirectory) {
+            newAttachments.push({
+              id: generateId(),
+              file: new File([], name, { type: 'inode/directory' }),
+              type: 'folder',
+              nativePath: filePath,
+            });
+            continue;
+          }
+        } catch {
+          // If stat fails, keep the existing file path handling below.
+        }
+
         const ext = name.split('.').pop()?.toLowerCase() || '';
         const imageExts = [
           'jpg',
@@ -922,6 +965,82 @@ export function ChatInput({
     fileInputRef.current?.click();
   };
 
+  const addFolderPath = useCallback((folderPath: string) => {
+    const normalizedPath = folderPath.trim();
+    if (!normalizedPath) return;
+
+    const name = getPathName(normalizedPath);
+    const folderAttachment: Attachment = {
+      id: generateId(),
+      file: new File([], name, { type: 'inode/directory' }),
+      type: 'folder',
+      nativePath: normalizedPath,
+    };
+
+    setAttachments((prev) => {
+      if (
+        prev.some(
+          (attachment) =>
+            attachment.type === 'folder' &&
+            attachment.nativePath === normalizedPath
+        )
+      ) {
+        return prev;
+      }
+      return [...prev, folderAttachment];
+    });
+    setFolderAccessWarning('');
+  }, []);
+
+  const requestFolderAccess = useCallback(async () => {
+    if (isRunning || disabled) return;
+
+    try {
+      if (typeof window === 'undefined') return;
+
+      if (!('__TAURI_INTERNALS__' in window)) {
+        const manualPath = window.prompt(
+          '请输入要授权给 agent 读取的文件夹完整路径'
+        );
+        if (manualPath?.trim()) {
+          addFolderPath(manualPath);
+        }
+        return;
+      }
+
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: '选择要授权给 agent 读取的文件夹',
+      });
+
+      if (!selected || Array.isArray(selected)) return;
+
+      try {
+        const { readDir, startAccessingSecurityScopedResource } =
+          await import('@tauri-apps/plugin-fs');
+        try {
+          await startAccessingSecurityScopedResource(selected);
+        } catch {
+          // Desktop platforms may not require explicit security scope.
+        }
+        await readDir(selected);
+      } catch (error) {
+        setFolderAccessWarning(
+          `无法读取该文件夹：${error instanceof Error ? error.message : String(error)}。请重新选择文件夹或在系统设置中授权后再试。`
+        );
+        return;
+      }
+
+      addFolderPath(selected);
+    } catch (error) {
+      setFolderAccessWarning(
+        `无法打开文件夹授权窗口：${error instanceof Error ? error.message : String(error)}。你也可以直接粘贴文件夹完整路径。`
+      );
+    }
+  }, [addFolderPath, disabled, isRunning]);
+
   // Read a File object as base64 data URL
   const readFileAsBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -941,6 +1060,18 @@ export function ChatInput({
     const result: MessageAttachment[] = [];
 
     for (const a of attachments) {
+      if (a.type === 'folder') {
+        result.push({
+          id: a.id,
+          type: 'folder',
+          name: a.file.name,
+          data: '',
+          mimeType: 'inode/directory',
+          path: a.nativePath,
+        });
+        continue;
+      }
+
       // For images, only include if preview exists and has data
       if (a.type === 'image') {
         if (!a.preview || a.preview.length === 0) {
@@ -1003,6 +1134,13 @@ export function ChatInput({
       !isRunning &&
       !disabled
     ) {
+      if (needsFolderAuthorization(value) && !hasFolderAttachments) {
+        setFolderAccessWarning(
+          '这个任务需要读取本地文件夹。请先选择文件夹完成授权，或在输入框中补充完整路径后再发送。'
+        );
+        return;
+      }
+
       const mentionExtraction = extractMentionExecutionScope(
         value.trim(),
         mentionOptions
@@ -1098,6 +1236,9 @@ export function ChatInput({
   ) => {
     setValue(event.target.value);
     setTextareaScrollTop(event.currentTarget.scrollTop);
+    if (folderAccessWarning && !needsFolderAuthorization(event.target.value)) {
+      setFolderAccessWarning('');
+    }
   };
 
   const handleTextareaScroll = (event: React.UIEvent<HTMLTextAreaElement>) => {
@@ -1308,7 +1449,11 @@ export function ChatInput({
               key={attachment.id}
               className="group border-border/50 bg-muted/50 relative flex items-center gap-2 rounded-lg border px-3 py-2"
             >
-              {attachment.type === 'image' && attachment.preview ? (
+              {attachment.type === 'folder' ? (
+                <div className="bg-primary/10 text-primary flex h-10 w-10 items-center justify-center rounded">
+                  <FolderOpen className="h-5 w-5" />
+                </div>
+              ) : attachment.type === 'image' && attachment.preview ? (
                 <img
                   src={attachment.preview}
                   alt={attachment.file.name}
@@ -1319,8 +1464,15 @@ export function ChatInput({
                   <FileText className="text-muted-foreground h-5 w-5" />
                 </div>
               )}
-              <span className="text-foreground max-w-[120px] truncate text-sm">
-                {attachment.file.name}
+              <span className="min-w-0">
+                <span className="text-foreground block max-w-[120px] truncate text-sm">
+                  {attachment.file.name}
+                </span>
+                {attachment.type === 'folder' && (
+                  <span className="text-muted-foreground block max-w-[120px] truncate text-xs">
+                    已授权文件夹
+                  </span>
+                )}
               </span>
               <button
                 type="button"
@@ -1483,6 +1635,34 @@ export function ChatInput({
         </div>
       )}
 
+      {(shouldSuggestFolderAccess || folderAccessWarning) && (
+        <div
+          className={cn(
+            'mb-3 flex items-start justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm',
+            folderAccessWarning
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-orange-200 bg-orange-50 text-orange-800'
+          )}
+        >
+          <div className="flex min-w-0 items-start gap-2">
+            <ShieldCheck className="mt-0.5 size-4 shrink-0" />
+            <p className="min-w-0 leading-5">
+              {folderAccessWarning ||
+                '建议先选择目标文件夹完成授权，agent 会使用真实路径读取和归档。'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={requestFolderAccess}
+            disabled={isRunning || disabled}
+            className="bg-background/80 hover:bg-background shrink-0 rounded-lg border border-current/30 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            选择文件夹
+          </button>
+        </div>
+      )}
+
       {/* Textarea */}
       <div className="relative overflow-hidden">
         {hasMentionHighlights && (
@@ -1574,6 +1754,16 @@ export function ChatInput({
               >
                 <Paperclip className="size-4" />
                 <span>{t.home.addFilesOrPhotos}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void requestFolderAccess();
+                }}
+                className="cursor-pointer gap-3 py-2.5"
+              >
+                <FolderOpen className="size-4" />
+                <span>选择文件夹授权</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuSub>

@@ -37,6 +37,7 @@ import {
   CheckCircle2,
   ChevronDown,
   FileText,
+  FolderOpen,
   PanelLeft,
   Pencil,
 } from 'lucide-react';
@@ -1241,6 +1242,16 @@ function UserMessage({
                   className="max-h-48 max-w-full"
                   isDataLoading={attachment.isLoading}
                 />
+              ) : attachment.type === 'folder' ? (
+                <div
+                  key={attachment.id}
+                  className="bg-muted flex items-center gap-2 rounded-lg px-3 py-2"
+                >
+                  <FolderOpen className="text-primary size-4" />
+                  <span className="text-foreground max-w-[220px] truncate text-sm">
+                    {attachment.name}
+                  </span>
+                </div>
               ) : (
                 <div
                   key={attachment.id}

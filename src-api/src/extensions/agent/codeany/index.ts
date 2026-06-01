@@ -87,6 +87,61 @@ const ResilientWebSearchTool = defineTool({
   },
 });
 
+const AskUserQuestionTool = defineTool({
+  name: 'AskUserQuestion',
+  description:
+    'Pause execution and ask the user for missing information, folder authorization, or a confirmation needed to continue. Use this instead of failing when a local folder cannot be read due to permissions.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      questions: {
+        type: 'array',
+        description: 'Questions to show the user.',
+        items: {
+          type: 'object',
+          properties: {
+            header: {
+              type: 'string',
+              description:
+                'Short label for the question, such as "文件夹授权".',
+            },
+            question: {
+              type: 'string',
+              description: 'The question shown to the user.',
+            },
+            options: {
+              type: 'array',
+              description: 'Suggested answers.',
+              items: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string' },
+                  description: { type: 'string' },
+                },
+                required: ['label', 'description'],
+              },
+            },
+            multiSelect: {
+              type: 'boolean',
+              description: 'Whether the user may choose multiple options.',
+            },
+          },
+          required: ['header', 'question', 'options', 'multiSelect'],
+        },
+      },
+    },
+    required: ['questions'],
+  },
+  isReadOnly: true,
+  isConcurrencySafe: false,
+  async call(input) {
+    return JSON.stringify({
+      status: 'waiting_for_user',
+      questions: input.questions || [],
+    });
+  },
+});
+
 function getInvocableSkills(skills: SkillDefinition[]): SkillDefinition[] {
   return skills.filter(
     (skill) =>
@@ -233,13 +288,16 @@ function getCodeAnyBaseTools(
   allowedTools?: string[],
   scopedSkills?: SkillDefinition[]
 ): SdkToolDefinition[] {
-  const tools = getAllBaseTools().map((tool) =>
-    tool.name === 'WebSearch'
-      ? ResilientWebSearchTool
-      : tool.name === 'Skill' && scopedSkills
-        ? createScopedSkillTool(scopedSkills)
-        : tool
-  );
+  const tools = [
+    ...getAllBaseTools().map((tool) =>
+      tool.name === 'WebSearch'
+        ? ResilientWebSearchTool
+        : tool.name === 'Skill' && scopedSkills
+          ? createScopedSkillTool(scopedSkills)
+          : tool
+    ),
+    AskUserQuestionTool,
+  ];
   return filterTools(tools, allowedTools);
 }
 
@@ -394,6 +452,7 @@ const ALLOWED_TOOLS = [
   'Task',
   'LSP',
   'TodoWrite',
+  'AskUserQuestion',
 ];
 
 // ============================================================================

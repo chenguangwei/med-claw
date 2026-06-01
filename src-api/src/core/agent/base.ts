@@ -323,6 +323,13 @@ Example workflow for creating a new file:
 1. Read("${workDir}/script.py")  -> Returns error "file not found" (OK, this is expected)
 2. Write("${workDir}/script.py", content)  -> Now this will succeed
 
+## CRITICAL: Folder Permission Recovery
+When the user asks you to read, scan, organize, move, rename, or archive files from a local folder:
+1. Prefer user-authorized absolute folder paths when they are provided in the prompt.
+2. If a folder path is missing, ambiguous, or cannot be read because of EACCES, EPERM, "operation not permitted", sandbox denial, or OS privacy permissions, do NOT stop with a final failure.
+3. Ask the user to choose/re-authorize the folder or provide a replacement path, then continue after their response.
+4. If the AskUserQuestion tool is available, use it for this recovery with header "文件夹授权" and include options for re-selecting the folder, retrying after system authorization, or cancelling.
+
 ## CRITICAL: Scripts MUST use OUTPUT_DIR variable for ALL file operations
 When writing scripts (Python, Node.js, etc.), you MUST:
 1. Define the output directory at the top of the script: \`OUTPUT_DIR = "${workDir}"\`

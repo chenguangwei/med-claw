@@ -210,7 +210,7 @@ function guessMimeType(filePath: string): string {
  */
 export interface AttachmentReference {
   id: string;
-  type: 'image' | 'file';
+  type: 'image' | 'file' | 'folder';
   name: string;
   path: string; // File path instead of data
   mimeType?: string;
@@ -223,6 +223,16 @@ export async function attachmentToReference(
   sessionFolder: string,
   attachment: MessageAttachment
 ): Promise<AttachmentReference> {
+  if (attachment.type === 'folder') {
+    return {
+      id: attachment.id,
+      type: 'folder',
+      name: attachment.name,
+      path: attachment.path || attachment.data,
+      mimeType: attachment.mimeType,
+    };
+  }
+
   const filePath = await saveAttachmentToFile(sessionFolder, attachment);
 
   return {
@@ -240,6 +250,17 @@ export async function attachmentToReference(
 export async function referenceToAttachment(
   ref: AttachmentReference
 ): Promise<MessageAttachment> {
+  if (ref.type === 'folder') {
+    return {
+      id: ref.id,
+      type: 'folder',
+      name: ref.name,
+      data: '',
+      mimeType: ref.mimeType || 'inode/directory',
+      path: ref.path,
+    };
+  }
+
   const data = await loadAttachmentFromFile(ref.path, ref.mimeType);
 
   return {

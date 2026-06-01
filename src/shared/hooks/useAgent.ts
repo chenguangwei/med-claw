@@ -590,7 +590,7 @@ export interface PendingQuestion {
 // Attachment type for messages with images/files
 export interface MessageAttachment {
   id: string;
-  type: 'image' | 'file';
+  type: 'image' | 'file' | 'folder';
   name: string;
   data: string; // Base64 data for images
   mimeType?: string;
@@ -1065,10 +1065,17 @@ function buildConversationHistory(
       const imagePaths = msg.attachments
         ?.filter((a) => a.type === 'image' && a.path)
         .map((a) => a.path as string);
+      const folderPaths = msg.attachments
+        ?.filter((a) => a.type === 'folder' && a.path)
+        .map((a) => `- ${a.name}: ${a.path}`);
+      const contentWithFolders =
+        folderPaths && folderPaths.length > 0
+          ? `${msg.content || ''}\n\n[Authorized folders]\n${folderPaths.join('\n')}`
+          : msg.content || '';
 
       history.push({
         role: 'user',
-        content: msg.content || '',
+        content: contentWithFolders,
         imagePaths:
           imagePaths && imagePaths.length > 0 ? imagePaths : undefined,
       });
@@ -1105,6 +1112,19 @@ function buildConversationHistory(
   return history;
 }
 
+function appendAuthorizedFoldersToPrompt(
+  prompt: string,
+  attachments?: MessageAttachment[]
+): string {
+  const folderLines = attachments
+    ?.filter((a) => a.type === 'folder' && a.path)
+    .map((folder) => `- ${folder.name}: ${folder.path}`);
+
+  if (!folderLines || folderLines.length === 0) return prompt;
+
+  return `${prompt}\n\n[Authorized folders]\n${folderLines.join('\n')}\n\nFolder access rules:\n- Use these authorized absolute paths as the source folders for this task.\n- If any folder read, scan, move, or rename fails with EACCES, EPERM, "operation not permitted", or another permission/access error, do not end the task as failed. Ask the user to re-authorize or provide a replacement folder path, then retry after their response.\n- For destructive changes such as deletion or broad moves, summarize the intended changes and wait for explicit user confirmation unless the approved execution plan already authorizes them.`;
+}
+
 export function useAgent(): UseAgentReturn {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -1132,6 +1152,7 @@ export function useAgent(): UseAgentReturn {
   const taskIdRef = useRef<string | null>(null);
   const isRunningRef = useRef<boolean>(false);
   const initialPromptRef = useRef<string>('');
+  const planExecutionPromptRef = useRef<string>('');
   const executionScopeRef = useRef<AgentExecutionScope | undefined>(undefined);
 
   // Keep refs in sync with state (for use in callbacks to avoid stale closures)
@@ -1574,6 +1595,16 @@ export function useAgent(): UseAgentReturn {
         }
       }
 
+      const firstUserMessage = agentMessages.find(
+        (message) => message.type === 'user'
+      );
+      if (firstUserMessage?.type === 'user') {
+        planExecutionPromptRef.current = appendAuthorizedFoldersToPrompt(
+          firstUserMessage.content || '',
+          firstUserMessage.attachments
+        );
+      }
+
       // Set messages immediately (with loading placeholders for attachments)
       setMessages(agentMessages);
       setTaskId(id);
@@ -1958,6 +1989,7 @@ export function useAgent(): UseAgentReturn {
       isRunningRef.current = true; // Sync update ref immediately
       setMessages([]);
       setInitialPrompt(prompt);
+      planExecutionPromptRef.current = prompt;
       executionScopeRef.current = executionScope;
       setPhase('planning');
       setPlan(null);
@@ -2072,11 +2104,27 @@ export function useAgent(): UseAgentReturn {
       // Save file attachments to disk and augment prompt with file paths
       const fileAttachments =
         attachments?.filter((a) => a.type === 'file') || [];
+      const folderAttachments =
+        attachments?.filter((a) => a.type === 'folder' && a.path) || [];
+      const folderRefs: AttachmentReference[] = folderAttachments.map((a) => ({
+        id: a.id,
+        type: 'folder',
+        name: a.name,
+        path: a.path || '',
+        mimeType: a.mimeType,
+      }));
       const scopedPrompt = executionScope?.instruction
         ? `${executionScope.instruction}\n${prompt}`
         : prompt;
       let augmentedPrompt = scopedPrompt;
       let savedFileRefs: AttachmentReference[] = [];
+
+      if (folderAttachments.length > 0) {
+        augmentedPrompt = appendAuthorizedFoldersToPrompt(
+          augmentedPrompt,
+          folderAttachments
+        );
+      }
 
       if (fileAttachments.length > 0) {
         // Ensure we have a folder to save attachments to
@@ -2101,7 +2149,7 @@ export function useAgent(): UseAgentReturn {
 
             // Append file paths to prompt so the agent knows about them
             const filePaths = savedFileRefs.map((r) => r.path).join('\n');
-            augmentedPrompt = `${scopedPrompt}\n\n[Attached files]\n${filePaths}`;
+            augmentedPrompt = `${augmentedPrompt}\n\n[Attached files]\n${filePaths}`;
           } catch (error) {
             console.error('[useAgent] Failed to save file attachments:', error);
           }
@@ -2130,9 +2178,11 @@ export function useAgent(): UseAgentReturn {
               return `[File: ${a.name}] (binary file, unable to include inline)`;
             })
             .join('\n\n');
-          augmentedPrompt = `${scopedPrompt}\n\n${fileInfo}`;
+          augmentedPrompt = `${augmentedPrompt}\n\n${fileInfo}`;
         }
       }
+
+      planExecutionPromptRef.current = augmentedPrompt;
 
       // Debug logging for attachments
       if (attachments && attachments.length > 0) {
@@ -2163,7 +2213,8 @@ export function useAgent(): UseAgentReturn {
 
         // Fast chat detection: short text, no attachments, no file/code intent
         // The chat service handles both Anthropic (native SDK) and OpenAI-compatible (fetch) APIs.
-        const hasFileAttachments = fileAttachments.length > 0;
+        const hasFileAttachments =
+          fileAttachments.length > 0 || folderAttachments.length > 0;
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
@@ -2266,7 +2317,7 @@ export function useAgent(): UseAgentReturn {
           // Save to database
           try {
             // Save user message with attachment refs
-            const allRefs = [...savedFileRefs];
+            const allRefs = [...folderRefs, ...savedFileRefs];
             await createMessage({
               task_id: currentTaskId,
               type: 'user',
@@ -2316,7 +2367,10 @@ export function useAgent(): UseAgentReturn {
           // Save user message to database (save image attachments to files;
           // file attachments were already saved earlier)
           try {
-            const allRefs: AttachmentReference[] = [...savedFileRefs];
+            const allRefs: AttachmentReference[] = [
+              ...folderRefs,
+              ...savedFileRefs,
+            ];
             const imageAttachments =
               attachments?.filter((a) => a.type === 'image') || [];
             if (imageAttachments.length > 0 && computedSessionFolder) {
@@ -2382,7 +2436,7 @@ export function useAgent(): UseAgentReturn {
 
         // Save user message to database (for plan path)
         try {
-          const allRefs = [...savedFileRefs];
+          const allRefs = [...folderRefs, ...savedFileRefs];
           await createMessage({
             task_id: currentTaskId,
             type: 'user',
@@ -2633,6 +2687,8 @@ export function useAgent(): UseAgentReturn {
       const scopedInitialPrompt = executionScopeRef.current?.instruction
         ? `${executionScopeRef.current.instruction}\n${initialPrompt}`
         : initialPrompt;
+      const executionPrompt =
+        planExecutionPromptRef.current || scopedInitialPrompt;
 
       const response = await fetchWithRetry(
         `${AGENT_SERVER_URL}/agent/execute`,
@@ -2643,7 +2699,7 @@ export function useAgent(): UseAgentReturn {
           },
           body: JSON.stringify({
             planId: plan.id,
-            prompt: scopedInitialPrompt,
+            prompt: executionPrompt,
             workDir,
             taskId,
             modelConfig,
@@ -2819,10 +2875,18 @@ export function useAgent(): UseAgentReturn {
         executionScopeRef.current = executionScope;
       }
       const currentExecutionScope = executionScope || executionScopeRef.current;
-      const scopedReply =
+      let scopedReply =
         currentExecutionScope?.instruction && !isSlashCommand(reply)
           ? `${currentExecutionScope.instruction}\n${reply}`
           : reply;
+      const replyFolderAttachments =
+        attachments?.filter((a) => a.type === 'folder' && a.path) || [];
+      if (replyFolderAttachments.length > 0) {
+        const folderLines = replyFolderAttachments
+          .map((folder) => `- ${folder.name}: ${folder.path}`)
+          .join('\n');
+        scopedReply = `${scopedReply}\n\n[Authorized folders]\n${folderLines}\n\nIf the previous step failed because of folder permissions, retry with these authorized paths. If access still fails, ask for re-authorization instead of ending the task.`;
+      }
 
       // Add user message to UI immediately (with attachments if any)
       const userMessage: AgentMessage = {
@@ -2910,7 +2974,8 @@ export function useAgent(): UseAgentReturn {
         // Fast chat detection for follow-up messages
         // The chat service handles both Anthropic (native SDK) and OpenAI-compatible (fetch) APIs.
         const hasFileAttachments =
-          attachments?.some((a) => a.type === 'file') || false;
+          attachments?.some((a) => a.type === 'file' || a.type === 'folder') ||
+          false;
         const shouldUseFastChat =
           modelConfig &&
           !hasFileAttachments &&
@@ -3163,6 +3228,7 @@ export function useAgent(): UseAgentReturn {
     setPhase('idle');
     setPlan(null);
     setIsRunning(false);
+    planExecutionPromptRef.current = '';
     sessionIdRef.current = null;
     activeTaskIdRef.current = null;
   }, []);

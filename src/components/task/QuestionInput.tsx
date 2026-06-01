@@ -1,12 +1,18 @@
 import { useCallback, useState } from 'react';
 import type { AgentQuestion, PendingQuestion } from '@/shared/hooks/useAgent';
 import { cn } from '@/shared/lib/utils';
-import { Check, Send } from 'lucide-react';
 import { useLanguage } from '@/shared/providers/language-provider';
+import { Check, FolderOpen, Send, ShieldCheck } from 'lucide-react';
 
 interface QuestionInputProps {
   pendingQuestion: PendingQuestion;
   onSubmit: (questionId: string, answers: Record<string, string>) => void;
+}
+
+function isFolderAuthorizationQuestion(question: AgentQuestion) {
+  return /文件夹授权|folder access|folder authorization|目录授权/iu.test(
+    `${question.header} ${question.question}`
+  );
 }
 
 export function QuestionInput({
@@ -45,6 +51,58 @@ export function QuestionInput({
       setOtherInputs((prev) => ({ ...prev, [questionIndex]: value }));
     },
     []
+  );
+
+  const handleFolderAuthorization = useCallback(
+    async (questionIndex: number) => {
+      try {
+        if (typeof window === 'undefined') return;
+
+        if (!('__TAURI_INTERNALS__' in window)) {
+          const manualPath = window.prompt('请输入已授权文件夹的完整路径');
+          if (manualPath?.trim()) {
+            handleOtherInput(
+              questionIndex,
+              `已选择并授权文件夹：${manualPath.trim()}`
+            );
+          }
+          return;
+        }
+
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: '重新选择并授权文件夹',
+        });
+        if (!selected || Array.isArray(selected)) return;
+
+        try {
+          const { readDir, startAccessingSecurityScopedResource } =
+            await import('@tauri-apps/plugin-fs');
+          try {
+            await startAccessingSecurityScopedResource(selected);
+          } catch {
+            // Desktop platforms may not require explicit security scope.
+          }
+          await readDir(selected);
+        } catch (error) {
+          handleOtherInput(
+            questionIndex,
+            `重新授权失败：${error instanceof Error ? error.message : String(error)}`
+          );
+          return;
+        }
+
+        handleOtherInput(questionIndex, `已选择并授权文件夹：${selected}`);
+      } catch (error) {
+        handleOtherInput(
+          questionIndex,
+          `无法打开授权窗口：${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    },
+    [handleOtherInput]
   );
 
   const handleSubmit = useCallback(() => {
@@ -88,6 +146,7 @@ export function QuestionInput({
             handleOptionSelect(qIndex, option, question.multiSelect)
           }
           onOtherInput={(value) => handleOtherInput(qIndex, value)}
+          onFolderAuthorization={() => handleFolderAuthorization(qIndex)}
           t={t}
         />
       ))}
@@ -117,6 +176,7 @@ interface QuestionItemProps {
   otherInput: string;
   onSelectOption: (option: string) => void;
   onOtherInput: (value: string) => void;
+  onFolderAuthorization: () => void;
   t: ReturnType<typeof useLanguage>['t'];
 }
 
@@ -126,18 +186,32 @@ function QuestionItem({
   otherInput,
   onSelectOption,
   onOtherInput,
+  onFolderAuthorization,
   t,
 }: QuestionItemProps) {
   const [showOther, setShowOther] = useState(false);
+  const isFolderQuestion = isFolderAuthorizationQuestion(question);
 
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-2">
-        <span className="text-muted-foreground bg-muted rounded px-2 py-0.5 text-xs font-medium">
+        <span className="text-muted-foreground bg-muted flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium">
+          {isFolderQuestion && <ShieldCheck className="size-3" />}
           {question.header}
         </span>
         <p className="text-foreground flex-1 text-sm">{question.question}</p>
       </div>
+
+      {isFolderQuestion && (
+        <button
+          type="button"
+          onClick={onFolderAuthorization}
+          className="border-primary/25 bg-primary/10 text-primary hover:bg-primary/15 flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors"
+        >
+          <FolderOpen className="size-4" />
+          选择文件夹并授权
+        </button>
+      )}
 
       <div className="grid grid-cols-1 gap-2 pl-0 sm:grid-cols-2">
         {question.options.map((option, oIndex) => {
@@ -202,7 +276,9 @@ function QuestionItem({
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">{t.common.questionInput.other}</p>
+            <p className="text-sm font-medium">
+              {t.common.questionInput.other}
+            </p>
             <p className="text-muted-foreground mt-0.5 text-xs">
               {t.common.questionInput.customInput}
             </p>
