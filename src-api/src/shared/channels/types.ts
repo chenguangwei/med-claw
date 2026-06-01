@@ -24,10 +24,32 @@ export interface ChannelAssistantBinding {
   mcpServerNames?: string[];
 }
 
+export type ChannelConversationType = 'private' | 'group';
+
+export interface ChannelAssistantRouteMatch {
+  conversationType?: ChannelConversationType;
+  conversationIds?: string[];
+  senderIds?: string[];
+  senderNames?: string[];
+  keywords?: string[];
+  regex?: string;
+}
+
+export interface ChannelAssistantRoute {
+  id: string;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  match: ChannelAssistantRouteMatch;
+  assistant: ChannelAssistantBinding;
+  updatedAt: string;
+}
+
 export interface ChannelBinding {
   channel: ChannelId;
   enabled: boolean;
   defaultAssistant?: ChannelAssistantBinding;
+  assistantRoutes?: ChannelAssistantRoute[];
   config: Record<string, string | boolean | number | undefined>;
   updatedAt: string;
 }
@@ -42,6 +64,7 @@ export interface ChannelMediaAttachment {
 
 export interface ChannelInboundMessage {
   channel: ChannelId;
+  conversationType?: ChannelConversationType;
   conversationId: string;
   messageId?: string;
   senderId?: string;
@@ -66,8 +89,11 @@ export interface ChannelConversationMessage {
 export interface ChannelConversationSession {
   id: string;
   channel: ChannelId;
+  conversationType?: ChannelConversationType;
   conversationId: string;
   assistant?: ChannelAssistantBinding;
+  assistantRouteId?: string;
+  assistantRouteName?: string;
   history: ChannelConversationMessage[];
   createdAt: string;
   lastActiveAt: string;

@@ -14,10 +14,10 @@ import { getAppDir } from '@/config/constants';
 import { getProviderManager } from '@/shared/provider/manager';
 import { createSession, runAgent } from '@/shared/services/agent';
 
-import { createWeixinLoginManager } from './weixin-login';
 import type {
   ChannelAgentRunner,
   ChannelAssistantBinding,
+  ChannelAssistantRoute,
   ChannelAuthSession,
   ChannelBinding,
   ChannelCommandResult,
@@ -33,6 +33,7 @@ import type {
   ChannelOutboundSender,
   ChannelSendResult,
 } from './types';
+import { createWeixinLoginManager } from './weixin-login';
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 const MAX_CHANNEL_HISTORY_MESSAGES = 20;
@@ -112,6 +113,7 @@ function loadStoredBindings(storeFile: string): Map<ChannelId, ChannelBinding> {
         ...current,
         enabled: Boolean(binding.enabled),
         defaultAssistant: normalizeAssistantBinding(binding.defaultAssistant),
+        assistantRoutes: normalizeAssistantRoutes(binding.assistantRoutes),
         config:
           binding.config && typeof binding.config === 'object'
             ? binding.config
@@ -150,15 +152,97 @@ function normalizeAssistantBinding(
   if (!binding) return undefined;
 
   const next: ChannelAssistantBinding = {};
-  if (binding.assistantId) next.assistantId = binding.assistantId;
-  if (binding.assistantName) next.assistantName = binding.assistantName;
-  if (binding.prompt) next.prompt = binding.prompt;
-  if (Array.isArray(binding.skillNames)) next.skillNames = binding.skillNames;
-  if (Array.isArray(binding.mcpServerNames)) {
-    next.mcpServerNames = binding.mcpServerNames;
+  const assistantId =
+    typeof binding.assistantId === 'string' ? binding.assistantId.trim() : '';
+  const assistantName =
+    typeof binding.assistantName === 'string'
+      ? binding.assistantName.trim()
+      : '';
+  const prompt =
+    typeof binding.prompt === 'string' ? binding.prompt.trim() : '';
+  const skillNames = normalizeStringList(binding.skillNames);
+  const mcpServerNames = normalizeStringList(binding.mcpServerNames);
+
+  if (assistantId) next.assistantId = assistantId;
+  if (assistantName) next.assistantName = assistantName;
+  if (prompt) next.prompt = prompt;
+  if (skillNames.length > 0) next.skillNames = skillNames;
+  if (mcpServerNames.length > 0) {
+    next.mcpServerNames = mcpServerNames;
   }
 
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeRouteMatch(match: unknown): ChannelAssistantRoute['match'] {
+  if (!match || typeof match !== 'object') return {};
+  const value = match as ChannelAssistantRoute['match'];
+  const next: ChannelAssistantRoute['match'] = {};
+
+  if (
+    value.conversationType === 'private' ||
+    value.conversationType === 'group'
+  ) {
+    next.conversationType = value.conversationType;
+  }
+  next.conversationIds = normalizeStringList(value.conversationIds);
+  next.senderIds = normalizeStringList(value.senderIds);
+  next.senderNames = normalizeStringList(value.senderNames);
+  next.keywords = normalizeStringList(value.keywords);
+  if (typeof value.regex === 'string' && value.regex.trim()) {
+    next.regex = value.regex.trim();
+  }
+
+  return next;
+}
+
+function normalizeAssistantRoute(
+  route: unknown,
+  fallbackPriority: number
+): ChannelAssistantRoute | undefined {
+  if (!route || typeof route !== 'object') return undefined;
+  const value = route as Partial<ChannelAssistantRoute>;
+  const assistant = normalizeAssistantBinding(value.assistant);
+  if (!assistant) return undefined;
+
+  return {
+    id:
+      typeof value.id === 'string' && value.id.trim()
+        ? value.id.trim()
+        : `route-${nanoid(8)}`,
+    name:
+      typeof value.name === 'string' && value.name.trim()
+        ? value.name.trim()
+        : assistant.assistantName || '助手路由',
+    enabled: value.enabled !== false,
+    priority:
+      typeof value.priority === 'number' && Number.isFinite(value.priority)
+        ? value.priority
+        : fallbackPriority,
+    match: normalizeRouteMatch(value.match),
+    assistant,
+    updatedAt: value.updatedAt || nowIso(),
+  };
+}
+
+function normalizeAssistantRoutes(value: unknown): ChannelAssistantRoute[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((route, index) => normalizeAssistantRoute(route, index + 1))
+    .filter((route): route is ChannelAssistantRoute => Boolean(route))
+    .sort((left, right) => left.priority - right.priority);
 }
 
 function buildSkillsConfig(
@@ -276,13 +360,93 @@ function firstNonEmptyString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function normalizeApiType(
-  value: unknown
-): AgentConfig['apiType'] | undefined {
+function normalizeApiType(value: unknown): AgentConfig['apiType'] | undefined {
   if (value === 'anthropic-messages' || value === 'openai-completions') {
     return value;
   }
   return undefined;
+}
+
+function lower(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function matchesList(values: string[] | undefined, actual?: string): boolean {
+  if (!values?.length) return true;
+  if (!actual) return false;
+  const normalizedActual = lower(actual);
+  return values.some((value) => lower(value) === normalizedActual);
+}
+
+function matchesKeywords(
+  keywords: string[] | undefined,
+  text: string
+): boolean {
+  if (!keywords?.length) return true;
+  const normalizedText = lower(text);
+  return keywords.some((keyword) => normalizedText.includes(lower(keyword)));
+}
+
+function matchesRegex(regex: string | undefined, text: string): boolean {
+  if (!regex) return true;
+  try {
+    return new RegExp(regex, 'i').test(text);
+  } catch {
+    return false;
+  }
+}
+
+function hasRouteCondition(route: ChannelAssistantRoute): boolean {
+  const match = route.match;
+  return Boolean(
+    match.conversationType ||
+    match.conversationIds?.length ||
+    match.senderIds?.length ||
+    match.senderNames?.length ||
+    match.keywords?.length ||
+    match.regex
+  );
+}
+
+export function channelAssistantRouteMatches(
+  route: ChannelAssistantRoute,
+  inbound: ChannelInboundMessage
+): boolean {
+  if (!route.enabled || !hasRouteCondition(route)) return false;
+  const match = route.match;
+
+  if (
+    match.conversationType &&
+    match.conversationType !== inbound.conversationType
+  ) {
+    return false;
+  }
+
+  return (
+    matchesList(match.conversationIds, inbound.conversationId) &&
+    matchesList(match.senderIds, inbound.senderId) &&
+    matchesList(match.senderNames, inbound.senderName) &&
+    matchesKeywords(match.keywords, inbound.text) &&
+    matchesRegex(match.regex, inbound.text)
+  );
+}
+
+export function resolveChannelAssistantBinding(
+  inbound: ChannelInboundMessage,
+  binding?: ChannelBinding
+): {
+  assistant?: ChannelAssistantBinding;
+  route?: ChannelAssistantRoute;
+} {
+  const inboundAssistant = normalizeAssistantBinding(inbound.assistant);
+  if (inboundAssistant) return { assistant: inboundAssistant };
+
+  const route = normalizeAssistantRoutes(binding?.assistantRoutes).find(
+    (candidate) => channelAssistantRouteMatches(candidate, inbound)
+  );
+  if (route) return { assistant: route.assistant, route };
+
+  return { assistant: normalizeAssistantBinding(binding?.defaultAssistant) };
 }
 
 export function resolveChannelAgentModelConfig():
@@ -532,12 +696,17 @@ export function createChannelIntegrationService(
 
   function getOrCreateSession(
     inbound: ChannelInboundMessage,
-    assistant?: ChannelAssistantBinding
+    assistant?: ChannelAssistantBinding,
+    route?: ChannelAssistantRoute
   ): ChannelConversationSession {
     const key = createSessionKey(inbound.channel, inbound.conversationId);
     const existing = sessions.get(key);
     if (existing) {
       existing.assistant = assistant || existing.assistant;
+      existing.assistantRouteId = route?.id;
+      existing.assistantRouteName = route?.name;
+      existing.conversationType =
+        inbound.conversationType || existing.conversationType;
       return existing;
     }
 
@@ -545,8 +714,11 @@ export function createChannelIntegrationService(
     const session: ChannelConversationSession = {
       id: `channel-${inbound.channel}-${nanoid(10)}`,
       channel: inbound.channel,
+      conversationType: inbound.conversationType,
       conversationId: inbound.conversationId,
       assistant,
+      assistantRouteId: route?.id,
+      assistantRouteName: route?.name,
       history: [],
       createdAt: timestamp,
       lastActiveAt: timestamp,
@@ -585,6 +757,10 @@ export function createChannelIntegrationService(
           patch.defaultAssistant === undefined
             ? current.defaultAssistant
             : normalizeAssistantBinding(patch.defaultAssistant),
+        assistantRoutes:
+          patch.assistantRoutes === undefined
+            ? current.assistantRoutes
+            : normalizeAssistantRoutes(patch.assistantRoutes),
         updatedAt: nowIso(),
       };
       bindings.set(channel, next);
@@ -627,9 +803,7 @@ export function createChannelIntegrationService(
                 '请管理员完成平台消息回调配置。',
               ],
         warning:
-          channel === 'weixin'
-            ? '请在可信电脑上完成扫码登录。'
-            : undefined,
+          channel === 'weixin' ? '请在可信电脑上完成扫码登录。' : undefined,
       };
     },
 
@@ -638,9 +812,11 @@ export function createChannelIntegrationService(
       reply: ChannelOutboundMessage
     ): Promise<ChannelSendResult> {
       const binding = bindings.get(inbound.channel);
+      const resolution = resolveChannelAssistantBinding(inbound, binding);
       const session = getOrCreateSession(
         inbound,
-        inbound.assistant || binding?.defaultAssistant
+        resolution.assistant,
+        resolution.route
       );
       return outboundSender({ inbound, reply, session, binding });
     },
@@ -649,10 +825,9 @@ export function createChannelIntegrationService(
       inbound: ChannelInboundMessage
     ): Promise<ChannelInboundResult> {
       const binding = bindings.get(inbound.channel);
-      const assistant = normalizeAssistantBinding(
-        inbound.assistant || binding?.defaultAssistant
-      );
-      const session = getOrCreateSession(inbound, assistant);
+      const resolution = resolveChannelAssistantBinding(inbound, binding);
+      const assistant = resolution.assistant;
+      const session = getOrCreateSession(inbound, assistant, resolution.route);
       const timestamp = nowIso();
 
       session.status = 'running';
@@ -716,4 +891,8 @@ export const channelIntegrationService = createChannelIntegrationService();
 export const weixinLoginManager = createWeixinLoginManager({
   inboundHandler: (message) =>
     channelIntegrationService.handleInboundMessage(message),
+  autoStartStoredConnection:
+    process.env.UNIINS_CLAW_DISABLE_WEIXIN_AUTO_START === '1'
+      ? false
+      : undefined,
 });

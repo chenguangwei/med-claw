@@ -561,11 +561,32 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
           return;
         }
 
-        setImportStatus(
-          data.validation?.trustedSource
-            ? `已引入 ${data.skillName}，来源已识别为可信仓库。`
-            : `已引入 ${data.skillName}。请在启用前检查 SKILL.md 内容。`
-        );
+        const importedNames = Array.isArray(data.importedSkills)
+          ? data.importedSkills
+              .map((skill: { skillName?: unknown }) =>
+                String(skill.skillName || '').trim()
+              )
+              .filter(Boolean)
+          : [];
+        const importedSkillName = importedNames[0] || data.skillName;
+        const multiSkillLabel =
+          importedNames.length > 6
+            ? `${importedNames.length} 个 Skills：${importedNames.slice(0, 6).join('、')} 等`
+            : `${importedNames.length} 个 Skills：${importedNames.join('、')}`;
+
+        if (importedNames.length > 1) {
+          setImportStatus(
+            data.validation?.trustedSource
+              ? `已从可信仓库引入 ${multiSkillLabel}。`
+              : `已引入 ${multiSkillLabel}。请在启用前检查 SKILL.md 内容。`
+          );
+        } else {
+          setImportStatus(
+            data.validation?.trustedSource
+              ? `已引入 ${importedSkillName}，来源已识别为可信仓库。`
+              : `已引入 ${importedSkillName}。请在启用前检查 SKILL.md 内容。`
+          );
+        }
         setGithubUrl('');
         setShowImportDialog(false);
         await loadSkills();
@@ -1087,8 +1108,8 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
                   从 GitHub 引入 Skill
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500">
-                  支持单个 skill 目录链接，例如
-                  https://github.com/anthropics/skills/tree/main/skills/pdf。
+                  支持单个 skill 目录链接，也支持包含 skills/*/SKILL.md
+                  的仓库根地址，例如 https://github.com/tw93/waza。
                 </p>
               </div>
               <button
@@ -1102,7 +1123,7 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
             <input
               value={githubUrl}
               onChange={(event) => setGithubUrl(event.target.value)}
-              placeholder="https://github.com/owner/repo/tree/main/skills/name"
+              placeholder="https://github.com/owner/repo 或 /tree/main/skills/name"
               className="mt-5 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 transition outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
             />
 
@@ -1506,7 +1527,7 @@ function SkillMarketCard({
       <article
         className={cn(
           'group relative flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-lg',
-          sideHero ? 'h-[252px]' : 'h-[164px]'
+          sideHero ? 'h-[252px]' : 'min-h-[220px]'
         )}
       >
         <button className="absolute top-6 right-6 rounded-full p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900">
@@ -1677,11 +1698,11 @@ function SkillCardFooter({
   return (
     <div
       className={cn(
-        'mt-auto flex items-center justify-between gap-4',
+        'mt-auto flex flex-wrap items-center justify-between gap-3',
         dense ? 'pt-3' : 'pt-6'
       )}
     >
-      <div className="flex min-w-0 items-center gap-3 text-sm text-slate-600">
+      <div className="flex min-w-0 flex-1 items-center gap-3 text-sm text-slate-600">
         <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-xs font-semibold text-slate-700">
           U2
         </span>

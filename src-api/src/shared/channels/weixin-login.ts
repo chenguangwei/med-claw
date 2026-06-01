@@ -14,6 +14,7 @@ import { getAppDir } from '@/config/constants';
 
 import type {
   ChannelConnectionStatus,
+  ChannelConversationType,
   ChannelInboundMessage,
   ChannelInboundResult,
   WeixinLoginSession,
@@ -258,8 +259,7 @@ export class WeixinLoginManager {
   constructor(options: WeixinLoginManagerOptions) {
     this.inboundHandler = options.inboundHandler;
     this.fetchQRCode = options.fetchQRCode || defaultFetchQRCode;
-    this.pollQRCodeStatus =
-      options.pollQRCodeStatus || defaultPollQRCodeStatus;
+    this.pollQRCodeStatus = options.pollQRCodeStatus || defaultPollQRCodeStatus;
     this.startBot = options.startBot || sdkStart;
     this.logout = options.logout || sdkLogout;
     this.stateDir = resolveOpenClawStateDir(options.stateDir);
@@ -280,7 +280,9 @@ export class WeixinLoginManager {
     }
   }
 
-  async startLogin(options: { force?: boolean } = {}): Promise<WeixinLoginSession> {
+  async startLogin(
+    options: { force?: boolean } = {}
+  ): Promise<WeixinLoginSession> {
     const active = [...this.sessions.values()].find((session) =>
       ['waiting', 'scanned'].includes(session.status)
     );
@@ -563,6 +565,11 @@ export class WeixinLoginManager {
   private createAgent(): Agent {
     return {
       chat: async (request) => {
+        const metadata = request as {
+          conversationType?: ChannelConversationType;
+          senderId?: string;
+          senderName?: string;
+        };
         const media = request.media
           ? [
               {
@@ -576,7 +583,10 @@ export class WeixinLoginManager {
 
         const result = await this.inboundHandler({
           channel: 'weixin',
+          conversationType: metadata.conversationType,
           conversationId: request.conversationId,
+          senderId: metadata.senderId,
+          senderName: metadata.senderName,
           text: request.text || '',
           media,
         });

@@ -12,13 +12,13 @@ import {
   getChannelDefinitions,
   resolveChannelAgentModelConfig,
 } from '../src/shared/channels/service.js';
-import { getProviderManager } from '../src/shared/provider/manager.js';
 import type {
   ChannelAgentRunner,
   ChannelCommandRunner,
   ChannelOutboundSender,
 } from '../src/shared/channels/types.js';
 import { createWeixinLoginManager } from '../src/shared/channels/weixin-login.js';
+import { getProviderManager } from '../src/shared/provider/manager.js';
 
 async function eventually(
   assertion: () => void,
@@ -140,6 +140,90 @@ test('channel service keeps one session per channel conversation and sends repli
   assert.equal(sent[0].channel, 'weixin');
 });
 
+test('channel service routes inbound messages to the first matching assistant route', async () => {
+  const observed: string[] = [];
+  const agentRunner: ChannelAgentRunner = async function* (request) {
+    observed.push(request.assistant?.assistantName || 'none');
+    yield {
+      type: 'result',
+      result: `handled by ${request.assistant?.assistantName || 'none'}`,
+    };
+    yield { type: 'done' };
+  };
+
+  const service = createChannelIntegrationService({
+    agentRunner,
+    outboundSender: async () => ({ ok: true }),
+    storeFile: false,
+  });
+
+  service.updateBinding('weixin', {
+    enabled: true,
+    defaultAssistant: {
+      assistantName: '默认客服',
+      prompt: '处理普通消息。',
+    },
+    assistantRoutes: [
+      {
+        id: 'empty-route',
+        name: '空白助手配置',
+        enabled: true,
+        priority: 1,
+        match: { keywords: ['退款'] },
+        assistant: {
+          skillNames: [],
+          mcpServerNames: [],
+        },
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'after-sales',
+        name: '售后关键词',
+        enabled: true,
+        priority: 2,
+        match: { keywords: ['退款', '售后'] },
+        assistant: {
+          assistantName: '售后助手',
+          prompt: '处理售后问题。',
+        },
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'vip-group',
+        name: 'VIP 群',
+        enabled: true,
+        priority: 3,
+        match: { conversationIds: ['vip-room'] },
+        assistant: {
+          assistantName: '私域销售助手',
+          prompt: '处理 VIP 客户。',
+        },
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const matched = await service.handleInboundMessage({
+    channel: 'weixin',
+    conversationId: 'normal-room',
+    senderName: 'Wei',
+    text: '我想申请退款',
+  });
+  const fallback = await service.handleInboundMessage({
+    channel: 'weixin',
+    conversationId: 'normal-room-2',
+    senderName: 'Wei',
+    text: '你好',
+  });
+
+  assert.deepEqual(observed, ['售后助手', '默认客服']);
+  assert.equal(matched.session.assistant?.assistantName, '售后助手');
+  assert.equal(matched.session.assistantRouteId, 'after-sales');
+  assert.equal(matched.session.assistantRouteName, '售后关键词');
+  assert.equal(fallback.session.assistant?.assistantName, '默认客服');
+  assert.equal(fallback.session.assistantRouteId, undefined);
+});
+
 test('channel service returns setup guidance before running agent without model credentials', async () => {
   const manager = getProviderManager();
   const previousConfig = manager.getConfig();
@@ -171,7 +255,10 @@ test('channel service returns setup guidance before running agent without model 
       text: '你好',
     });
 
-    assert.equal(result.reply.text, `Agent 执行失败：${CHANNEL_MODEL_CONFIG_ERROR}`);
+    assert.equal(
+      result.reply.text,
+      `Agent 执行失败：${CHANNEL_MODEL_CONFIG_ERROR}`
+    );
     assert.deepEqual(sent, [result.reply.text]);
   } finally {
     manager.setConfig(previousConfig);
@@ -227,10 +314,7 @@ test('setup commands are generated without invoking external CLIs by default', a
 
   assert.equal(feishu.command.command, 'lark-cli');
   assert.deepEqual(feishu.command.args, ['auth', 'login', '--recommend']);
-  assert.equal(
-    weixin.command.command,
-    'app'
-  );
+  assert.equal(weixin.command.command, 'app');
   assert.deepEqual(weixin.command.args, ['channels', 'weixin', 'connect']);
   assert.equal(dingtalk.command.command, 'dws');
   assert.deepEqual(dingtalk.command.args, ['auth', 'login']);
@@ -259,7 +343,7 @@ test('weixin login manager returns an in-app QR session and starts bot after con
       startBot: (_agent, options) => {
         startedAccountId = options?.accountId || '';
         return {
-          wait: () => new Promise<void>(() => undefined),
+          wait: async () => undefined,
         };
       },
       logout: () => undefined,
@@ -307,6 +391,23 @@ test('channel bindings persist to a local store file', async () => {
         assistantName: '客服助理',
         prompt: '只处理客户咨询。',
       },
+      assistantRoutes: [
+        {
+          id: 'vip',
+          name: 'VIP 客户',
+          enabled: true,
+          priority: 1,
+          match: {
+            conversationIds: ['vip-room'],
+            keywords: ['报价'],
+          },
+          assistant: {
+            assistantName: '销售助理',
+            prompt: '处理报价和跟进。',
+          },
+          updatedAt: new Date().toISOString(),
+        },
+      ],
       config: {
         robotCode: 'robot-1',
       },
@@ -319,6 +420,12 @@ test('channel bindings persist to a local store file', async () => {
 
     assert.equal(dingtalk?.enabled, true);
     assert.equal(dingtalk?.defaultAssistant?.assistantName, '客服助理');
+    assert.equal(dingtalk?.assistantRoutes?.[0]?.id, 'vip');
+    assert.equal(
+      dingtalk?.assistantRoutes?.[0]?.assistant.assistantName,
+      '销售助理'
+    );
+    assert.deepEqual(dingtalk?.assistantRoutes?.[0]?.match.keywords, ['报价']);
     assert.equal(dingtalk?.config.robotCode, 'robot-1');
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
