@@ -372,11 +372,26 @@ export class WeixinLoginManager {
     return { ...this.connection };
   }
 
-  async disconnect(): Promise<ChannelConnectionStatus> {
+  stopRuntime(): ChannelConnectionStatus {
     this.botAbortController?.abort();
     this.botAbortController = undefined;
     this.bot = undefined;
     this.releaseBotLock();
+    if (this.connection.status !== 'disconnected') {
+      this.connection = {
+        channel: 'weixin',
+        connected: false,
+        status: 'disconnected',
+        accountId: this.connection.accountId,
+        message: '微信消息监听已停止。',
+        updatedAt: nowIso(),
+      };
+    }
+    return this.getConnectionStatus();
+  }
+
+  async disconnect(): Promise<ChannelConnectionStatus> {
+    this.stopRuntime();
     this.logout({ log: () => undefined });
     this.connection = {
       channel: 'weixin',

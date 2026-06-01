@@ -17,7 +17,10 @@ import {
 } from '@/app/api';
 import { corsMiddleware } from '@/app/middleware/index.js';
 import { loadConfig } from '@/config/loader.js';
-import { startChannelRuntime } from '@/shared/channels/service';
+import {
+  startChannelRuntime,
+  weixinLoginManager,
+} from '@/shared/channels/service';
 import {
   initProviderManager,
   shutdownProviderManager,
@@ -82,40 +85,55 @@ const port = Number(process.env.PORT) || 2026;
 
 // Store server instance for hot reload cleanup
 let server: ServerType | null = null;
+let cleanupPromise: Promise<void> | null = null;
 
 // Cleanup function
 const cleanup = async () => {
-  // Stop all preview servers
-  try {
-    const previewManager = getPreviewManager();
-    await previewManager.stopAll();
-  } catch (error) {
-    console.error('Error stopping preview servers:', error);
-  }
+  if (cleanupPromise) return cleanupPromise;
 
-  // Shutdown provider manager
-  try {
-    await shutdownProviderManager();
-  } catch (error) {
-    console.error('Error shutting down provider manager:', error);
-  }
+  cleanupPromise = (async () => {
+    // Stop all preview servers
+    try {
+      const previewManager = getPreviewManager();
+      await previewManager.stopAll();
+    } catch (error) {
+      console.error('Error stopping preview servers:', error);
+    }
 
-  stopScheduledTaskRunner();
+    // Stop channel runtimes so dev hot reload does not leave a live Weixin lock.
+    try {
+      weixinLoginManager.stopRuntime();
+    } catch (error) {
+      console.error('Error stopping channel runtime:', error);
+    }
 
-  if (server) {
-    server.close();
-    server = null;
-  }
+    // Shutdown provider manager
+    try {
+      await shutdownProviderManager();
+    } catch (error) {
+      console.error('Error shutting down provider manager:', error);
+    }
+
+    stopScheduledTaskRunner();
+
+    if (server) {
+      server.close();
+      server = null;
+    }
+  })();
+
+  return cleanupPromise;
 };
 
 // Handle hot reload - close existing server
-process.on('SIGTERM', () => cleanup());
-process.on('SIGINT', () => cleanup());
-
-// For tsx watch - handle the restart signal
-if (process.env.NODE_ENV !== 'production') {
-  process.on('exit', () => cleanup());
+function handleShutdownSignal(exitCode: number) {
+  void cleanup().finally(() => {
+    process.exit(exitCode);
+  });
 }
+
+process.once('SIGTERM', () => handleShutdownSignal(0));
+process.once('SIGINT', () => handleShutdownSignal(130));
 
 // Initialize and start server
 async function start() {

@@ -66,6 +66,15 @@ export const defaultSandboxProviders: SandboxProviderSetting[] = [
     },
   },
   {
+    id: 'claude',
+    type: 'claude',
+    name: 'Claude Sandbox',
+    enabled: true,
+    config: {
+      defaultTimeout: 120000,
+    },
+  },
+  {
     id: 'native',
     type: 'native',
     name: 'Native (No Isolation)',
@@ -530,7 +539,26 @@ function mergeDefaultProviders(settings: Settings): Settings {
       providers.push(defaultProvider);
     }
   }
-  return { ...settings, providers };
+
+  const sandboxProviders = Array.isArray(settings.sandboxProviders)
+    ? [...settings.sandboxProviders]
+    : [...defaultSandboxProviders];
+  for (const defaultProvider of defaultSandboxProviders) {
+    if (!sandboxProviders.find((p) => p.id === defaultProvider.id)) {
+      sandboxProviders.push(defaultProvider);
+    }
+  }
+
+  const agentRuntimes = Array.isArray(settings.agentRuntimes)
+    ? [...settings.agentRuntimes]
+    : [...defaultAgentRuntimes];
+  for (const defaultRuntime of defaultAgentRuntimes) {
+    if (!agentRuntimes.find((r) => r.id === defaultRuntime.id)) {
+      agentRuntimes.push(defaultRuntime);
+    }
+  }
+
+  return { ...settings, providers, sandboxProviders, agentRuntimes };
 }
 
 function readSettingsCache(): Settings | null {

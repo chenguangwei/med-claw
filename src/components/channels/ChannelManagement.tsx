@@ -601,6 +601,7 @@ export function ChannelManagement() {
   const [testResult, setTestResult] = useState<ChannelInboundTestResult | null>(
     null
   );
+  const [testRunning, setTestRunning] = useState(false);
   const [expandedAdvancedRouteIds, setExpandedAdvancedRouteIds] = useState<
     string[]
   >([]);
@@ -1036,8 +1037,9 @@ export function ChannelManagement() {
 
   const runTestInbound = async () => {
     const text = testText.trim();
-    if (!text) return;
+    if (!text || testRunning) return;
 
+    setTestRunning(true);
     setTestResult(null);
     setError(null);
     try {
@@ -1065,6 +1067,8 @@ export function ChannelManagement() {
       await loadStatus();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTestRunning(false);
     }
   };
 
@@ -2083,10 +2087,20 @@ export function ChannelManagement() {
                 size="sm"
                 className="mt-2 w-full"
                 onClick={runTestInbound}
-                disabled={!testText.trim()}
+                disabled={!testText.trim() || testRunning}
               >
-                <Send className="size-4" />
-                {isZh ? '运行测试' : 'Run test'}
+                {testRunning ? (
+                  <RefreshCw className="size-4 animate-spin" />
+                ) : (
+                  <Send className="size-4" />
+                )}
+                {testRunning
+                  ? isZh
+                    ? '测试中...'
+                    : 'Testing...'
+                  : isZh
+                    ? '运行测试'
+                    : 'Run test'}
               </Button>
               {testResult && (
                 <div className="bg-muted text-muted-foreground mt-3 space-y-2 rounded p-2 text-xs">

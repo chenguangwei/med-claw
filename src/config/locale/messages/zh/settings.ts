@@ -34,6 +34,14 @@ export default {
   agentRuntimeDescription: '执行任务的 AI 智能体',
   runtimeCodeAnyAgent: 'CodeAny Agent',
   runtimeCodeAnyAgentDescription: '开源进程内智能体运行时，无需外部 CLI',
+  runtimeClaudeCode: 'Claude Code',
+  runtimeClaudeCodeDescription: '外部 Claude Code CLI 运行时（未接入）',
+  runtimeCodex: 'Codex CLI',
+  runtimeCodexDescription: '外部 Codex CLI 运行时（未接入）',
+  runtimeDeepAgents: 'DeepAgents',
+  runtimeDeepAgentsDescription: 'DeepAgents SDK 运行时（未接入）',
+  currentSelection: '当前',
+  notConnected: '未接入',
 
   // Code Environment
   codeEnvironment: '代码运行环境',
@@ -44,6 +52,8 @@ export default {
   envCodexSandboxDescription: '在沙盒环境中执行代码',
   envClaudeSandbox: 'Claude 沙盒',
   envClaudeSandboxDescription: '在沙盒环境中执行代码',
+  envBoxlite: 'Boxlite 沙盒',
+  envBoxliteDescription: 'Boxlite 沙盒环境（未接入）',
   installNode: 'Node.js 未安装',
   installNodeHint: '访问: https://nodejs.org',
   installPython: 'Python 未安装',

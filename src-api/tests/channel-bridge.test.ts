@@ -392,6 +392,86 @@ test('weixin login manager returns an in-app QR session and starts bot after con
   }
 });
 
+test('weixin login manager stops runtime without logging out stored account', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'uniins-weixin-'));
+  let logoutCalls = 0;
+  const createManager = (onStart: (accountId: string) => void) =>
+    createWeixinLoginManager({
+      stateDir: tempDir,
+      autoStartStoredConnection: false,
+      fetchQRCode: async () => ({
+        qrcode: 'qr-token-1',
+        qrcode_img_content: 'https://example.com/weixin-qr',
+      }),
+      pollQRCodeStatus: async () => ({
+        status: 'confirmed',
+        bot_token: 'bot-token',
+        ilink_bot_id: 'lock-test@im.bot',
+        ilink_user_id: 'user-1',
+        baseurl: 'https://ilinkai.weixin.qq.com',
+      }),
+      startBot: (_agent, options) => {
+        onStart(options?.accountId || '');
+        return {
+          wait: async () => new Promise<void>(() => undefined),
+        };
+      },
+      logout: () => {
+        logoutCalls += 1;
+      },
+      inboundHandler: async () => ({
+        session: {
+          id: 's1',
+          channel: 'weixin',
+          conversationId: 'c1',
+          history: [],
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+          status: 'idle',
+        },
+        reply: { text: 'ok' },
+        sent: { ok: true },
+        messages: [],
+      }),
+    });
+
+  try {
+    const lockPath = path.join(tempDir, 'openclaw-weixin', 'bot.lock');
+    const starts: string[] = [];
+    const first = createManager((accountId) =>
+      starts.push(`first:${accountId}`)
+    );
+    const second = createManager((accountId) =>
+      starts.push(`second:${accountId}`)
+    );
+
+    const session = await first.startLogin();
+    await eventually(() => {
+      assert.equal(
+        first.getLoginSession(session.sessionId)?.status,
+        'confirmed'
+      );
+      assert.equal(first.getConnectionStatus().connected, true);
+    });
+
+    await fs.access(lockPath);
+
+    first.stopRuntime();
+    assert.equal(logoutCalls, 0);
+    await assert.rejects(fs.access(lockPath), { code: 'ENOENT' });
+
+    await second.resumeStoredConnection();
+
+    assert.deepEqual(starts, [
+      'first:lock-test-im-bot',
+      'second:lock-test-im-bot',
+    ]);
+    assert.equal(second.getConnectionStatus().connected, true);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('channel bindings persist to a local store file', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'uniins-channel-'));
   const storeFile = path.join(tempDir, 'channels.json');

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/patch-deps.mjs",
+    "predev": "node scripts/free-dev-port.mjs",
     "dev": "node --import tsx --watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",

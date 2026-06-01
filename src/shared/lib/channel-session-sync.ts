@@ -11,6 +11,8 @@ import type {
   CreateMessageInput,
   CreateSessionInput,
   CreateTaskInput,
+  Session,
+  Task,
   TaskStatus,
 } from '../db/types';
 
@@ -38,6 +40,31 @@ export interface LocalChannelTaskSnapshot {
   taskStatus: TaskStatus;
   messages: CreateMessageInput[];
 }
+
+interface ChannelSessionSyncStore {
+  createMessage(input: CreateMessageInput): Promise<unknown>;
+  createSession(input: CreateSessionInput): Promise<unknown>;
+  createTask(input: CreateTaskInput): Promise<unknown>;
+  deleteMessagesByTaskId(taskId: string): Promise<unknown>;
+  getSession(sessionId: string): Promise<Session | null>;
+  getTask(taskId: string): Promise<Task | null>;
+  updateTask(
+    taskId: string,
+    input: { prompt?: string; status?: TaskStatus }
+  ): Promise<unknown>;
+}
+
+const localChannelSessionStore: ChannelSessionSyncStore = {
+  createMessage,
+  createSession,
+  createTask,
+  deleteMessagesByTaskId,
+  getSession,
+  getTask,
+  updateTask,
+};
+
+let channelSessionSyncQueue: Promise<void> = Promise.resolve();
 
 const CHANNEL_LABELS: Record<ChannelId, string> = {
   feishu: '飞书',
@@ -145,31 +172,46 @@ export function createChannelTaskSnapshot(
   };
 }
 
-export async function syncChannelSessionsToLocalDb(
-  sessions: ChannelSessionSnapshot[]
+async function syncChannelSessionsToStore(
+  sessions: ChannelSessionSnapshot[],
+  store: ChannelSessionSyncStore
 ): Promise<void> {
   for (const channelSession of sessions) {
     if (channelSession.history.length === 0) continue;
 
     const snapshot = createChannelTaskSnapshot(channelSession);
-    const existingSession = await getSession(snapshot.ids.sessionId);
+    const existingSession = await store.getSession(snapshot.ids.sessionId);
     if (!existingSession) {
-      await createSession(snapshot.sessionInput);
+      await store.createSession(snapshot.sessionInput);
     }
 
-    const existingTask = await getTask(snapshot.ids.taskId);
+    const existingTask = await store.getTask(snapshot.ids.taskId);
     if (!existingTask) {
-      await createTask(snapshot.taskInput);
+      await store.createTask(snapshot.taskInput);
     } else if (existingTask.prompt !== snapshot.taskInput.prompt) {
-      await updateTask(snapshot.ids.taskId, {
+      await store.updateTask(snapshot.ids.taskId, {
         prompt: snapshot.taskInput.prompt,
       });
     }
 
-    await deleteMessagesByTaskId(snapshot.ids.taskId);
+    await store.deleteMessagesByTaskId(snapshot.ids.taskId);
     for (const message of snapshot.messages) {
-      await createMessage(message);
+      await store.createMessage(message);
     }
-    await updateTask(snapshot.ids.taskId, { status: snapshot.taskStatus });
+    await store.updateTask(snapshot.ids.taskId, {
+      status: snapshot.taskStatus,
+    });
   }
+}
+
+export async function syncChannelSessionsToLocalDb(
+  sessions: ChannelSessionSnapshot[],
+  store: ChannelSessionSyncStore = localChannelSessionStore
+): Promise<void> {
+  const sync = channelSessionSyncQueue.then(
+    () => syncChannelSessionsToStore(sessions, store),
+    () => syncChannelSessionsToStore(sessions, store)
+  );
+  channelSessionSyncQueue = sync.catch(() => undefined);
+  return sync;
 }

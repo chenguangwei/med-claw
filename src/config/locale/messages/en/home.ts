@@ -15,30 +15,31 @@ export default {
   examplePrompts: {
     categories: {
       organizeFiles: {
-        label: 'Organize Files',
-        placeholder: 'Describe how you want to organize your files',
+        label: 'Organize Docs',
+        placeholder:
+          'Describe how you want to organize internal business documents',
         prompts: [
-          "Strictly within my 'Downloads' folder, scan only top-level files added in the last 30 days (ignoring subfolders and .app bundles). Remove duplicates, and categorize the rest by type into new subfolders here.",
-          "Find all video files on my computer larger than 500MB that haven't been opened in the last 6 months, and generate a checklist spreadsheet for me to review.",
-          "Read the '~/Desktop/Project_Assets' folder and batch rename all images based on their creation dates, using the format YYYY-MM-DD ProjectName_###.",
+          "Organize the 'Sales Contracts' folder by grouping contracts, quotes, and addendums by customer, signing month, and contract status. Generate a checklist of missing materials.",
+          "Scan the shared 'Admin Policies' folder, identify duplicate, outdated, and poorly named policy documents, and organize the findings into an Excel review log.",
+          "Read the 'Project Meeting Notes' folder, reorganize files by project name and meeting date, and generate an index with topic, owner, and action items.",
         ],
       },
       generateDocs: {
         label: 'Generate Docs',
         placeholder: 'Describe the document you want to generate',
         prompts: [
-          "Analyze the 'Project_Proposal' folder and generate a 3-slide presentation (.pptx) with a sophisticated, high-end consulting design. Focus on visual storytelling, clean typography, and a cohesive logical flow. Save the presentation to my Desktop.",
-          "Find all PDF invoices in my 'May_Tax_Returns' folder, extract the billing date, company name, and total amount, and compile them into a formatted .xlsx summary.",
-          "Summarize this week's meeting notes from the Syncs folder, generate action items by owner, and output a cleanly formatted executive summary in Word.",
+          "Use 'Monthly Operations Data.xlsx' and department weekly reports to generate a management-facing operations review deck with key metrics, risks, and next-month priorities.",
+          "Summarize the notes in the 'Customer Visit Records' folder into a Word follow-up report by customer, including needs, progress, next actions, and owners.",
+          "Read the 'New Hire Onboarding Materials' folder and draft a standardized onboarding handbook covering process steps, system accounts, admin items, and FAQs.",
         ],
       },
       automateTasks: {
         label: 'Automate Tasks',
         placeholder: 'Describe the task you want to automate',
         prompts: [
-          'Write a Python web scraper to fetch the top 30 news titles from HackerNews, save the results to a CSV file, and run the script locally right now.',
-          'Check the top 3 products of the week from producthunt.com, extract their names and taglines, and generate a sleek, 3:4 aspect ratio introductory poster, saving it to my desktop.',
-          "Read the 'clients.csv' containing company names on my desktop. Write and run a script to automatically search the web for each company's official website and contact email, and update the local CSV file with this new data.",
+          'Every Friday afternoon, summarize weekly reports submitted by each department, extract progress, risks, and next-week plans, and generate an executive weekly summary.',
+          "Every morning, check the 'Pending Contract Approvals' folder for new files, extract contract number, customer name, amount, and due date, and update the approval tracker.",
+          'At the beginning of each month, read the attendance sheet and reimbursement details, flag abnormal records, and generate a review list for HR and Finance.',
         ],
       },
     },

@@ -35,6 +35,15 @@ export default {
   runtimeCodeAnyAgent: 'CodeAny Agent',
   runtimeCodeAnyAgentDescription:
     'Open-source in-process agent runtime, no CLI binary required',
+  runtimeClaudeCode: 'Claude Code',
+  runtimeClaudeCodeDescription:
+    'External Claude Code CLI runtime (not wired yet)',
+  runtimeCodex: 'Codex CLI',
+  runtimeCodexDescription: 'External Codex CLI runtime (not wired yet)',
+  runtimeDeepAgents: 'DeepAgents',
+  runtimeDeepAgentsDescription: 'DeepAgents SDK runtime (not wired yet)',
+  currentSelection: 'Current',
+  notConnected: 'Not wired',
 
   // Code Environment
   codeEnvironment: 'Code Environment',
@@ -45,6 +54,8 @@ export default {
   envCodexSandboxDescription: 'Run in OpenAI sandbox',
   envClaudeSandbox: 'Claude Sandbox',
   envClaudeSandboxDescription: 'Run in Anthropic sandbox',
+  envBoxlite: 'Boxlite Sandbox',
+  envBoxliteDescription: 'Boxlite sandbox environment (not wired yet)',
   installNode: 'Node.js not installed',
   installNodeHint: 'Visit: https://nodejs.org',
   installPython: 'Python not installed',
