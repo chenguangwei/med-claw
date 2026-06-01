@@ -92,7 +92,19 @@ test('collectChannelAgentReply prefers final result then accumulated text', () =
       { type: 'direct_answer', content: '第二段' },
       { type: 'done' },
     ]),
-    '第一段\n第二段'
+    '第一段第二段'
+  );
+
+  assert.equal(
+    collectChannelAgentReply([
+      { type: 'text', content: '实现' },
+      { type: 'text', content: '小额' },
+      { type: 'text', content: '人伤' },
+      { type: 'text', content: '赔付' },
+      { type: 'text', content: '的技术方案' },
+      { type: 'done' },
+    ]),
+    '实现小额人伤赔付的技术方案'
   );
 });
 
@@ -135,6 +147,7 @@ test('channel service keeps one session per channel conversation and sends repli
   });
 
   assert.equal(first.session.id, second.session.id);
+  assert.match(first.session.id, /^channel-weixin-wx-user-1-/);
   assert.equal(second.session.history.length, 4);
   assert.equal(sent.length, 2);
   assert.equal(sent[0].channel, 'weixin');

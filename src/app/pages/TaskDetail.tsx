@@ -13,6 +13,7 @@ import {
   deleteTask,
   getAllTasks,
   getFilesByTaskId,
+  getTask,
   updateTask,
   type LibraryFile,
   type Task,
@@ -28,6 +29,7 @@ import {
   syncChannelSessionsToLocalDb,
   type ChannelSessionSnapshot,
 } from '@/shared/lib/channel-session-sync';
+import { normalizeAssistantMessageContent } from '@/shared/lib/message-format';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import {
@@ -670,6 +672,59 @@ function TaskDetailContent() {
     }
     loadAllTasks();
   }, [task, taskId]);
+
+  const isChannelTask =
+    taskId?.startsWith('channel-') || task?.session_id?.startsWith('channel-');
+
+  useEffect(() => {
+    if (!taskId || !isChannelTask) return;
+
+    const currentTaskId = taskId;
+    let cancelled = false;
+    let inFlight = false;
+
+    async function syncCurrentChannelTask() {
+      if (inFlight) return;
+      inFlight = true;
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/channels`);
+        if (!response.ok) return;
+
+        const channelStatus = (await response.json()) as {
+          sessions?: ChannelSessionSnapshot[];
+        };
+        if (!Array.isArray(channelStatus.sessions)) return;
+
+        await syncChannelSessionsToLocalDb(channelStatus.sessions);
+        if (cancelled) return;
+
+        const [refreshedTask, dbTasks] = await Promise.all([
+          getTask(currentTaskId),
+          getAllTasks(),
+        ]);
+        if (cancelled) return;
+
+        if (refreshedTask) {
+          setTask(refreshedTask);
+          await loadMessages(currentTaskId);
+        }
+        setAllTasks(dbTasks);
+      } catch (syncError) {
+        console.warn('Failed to sync current channel task:', syncError);
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    syncCurrentChannelTask();
+    const interval = window.setInterval(syncCurrentChannelTask, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [isChannelTask, loadMessages, taskId]);
 
   // Update UI immediately when a generated title arrives
   useEffect(() => {
@@ -1631,6 +1686,8 @@ function MessageItem({
   }
 
   if (message.type === 'text') {
+    const content = normalizeAssistantMessageContent(message.content || '');
+
     return (
       <div className="flex min-w-0 flex-col gap-3">
         <Logo />
@@ -1704,7 +1761,7 @@ function MessageItem({
               ),
             }}
           >
-            {message.content || ''}
+            {content}
           </ReactMarkdown>
         </div>
       </div>

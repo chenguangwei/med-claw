@@ -13,6 +13,7 @@ import type { AgentConfig } from '@/core/agent/types';
 import { getAppDir } from '@/config/constants';
 import { getProviderManager } from '@/shared/provider/manager';
 import { createSession, runAgent } from '@/shared/services/agent';
+import { runChat } from '@/shared/services/chat';
 
 import type {
   ChannelAgentRunner,
@@ -146,6 +147,49 @@ function createSessionKey(channel: ChannelId, conversationId: string): string {
   return `${channel}:${conversationId}`;
 }
 
+function hashString(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function slugify(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+
+  return slug || 'conversation';
+}
+
+function createStableChannelSessionId(input: {
+  channel: ChannelId;
+  conversationId: string;
+}): string {
+  const stableKey = `${input.channel}:${input.conversationId}`;
+  return [
+    'channel',
+    input.channel,
+    slugify(input.conversationId),
+    hashString(stableKey),
+  ].join('-');
+}
+
+function createChannelWorkDir(inbound: ChannelInboundMessage): string {
+  return join(
+    getAppDir(),
+    'sessions',
+    createStableChannelSessionId({
+      channel: inbound.channel,
+      conversationId: inbound.conversationId,
+    })
+  );
+}
+
 function normalizeAssistantBinding(
   binding?: ChannelAssistantBinding
 ): ChannelAssistantBinding | undefined {
@@ -245,10 +289,14 @@ function normalizeAssistantRoutes(value: unknown): ChannelAssistantRoute[] {
     .sort((left, right) => left.priority - right.priority);
 }
 
-function buildSkillsConfig(
-  assistant?: ChannelAssistantBinding
-): SkillsConfig | undefined {
-  if (!assistant?.skillNames) return undefined;
+function buildSkillsConfig(assistant?: ChannelAssistantBinding): SkillsConfig {
+  if (!assistant?.skillNames?.length) {
+    return {
+      enabled: false,
+      userDirEnabled: false,
+      appDirEnabled: false,
+    };
+  }
   return {
     enabled: true,
     userDirEnabled: true,
@@ -257,10 +305,14 @@ function buildSkillsConfig(
   };
 }
 
-function buildMcpConfig(
-  assistant?: ChannelAssistantBinding
-): McpConfig | undefined {
-  if (!assistant?.mcpServerNames) return undefined;
+function buildMcpConfig(assistant?: ChannelAssistantBinding): McpConfig {
+  if (!assistant?.mcpServerNames?.length) {
+    return {
+      enabled: false,
+      userDirEnabled: false,
+      appDirEnabled: false,
+    };
+  }
   return {
     enabled: true,
     userDirEnabled: true,
@@ -566,7 +618,7 @@ export function collectChannelAgentReply(messages: AgentMessage[]): string {
         message.content
     )
     .map((message) => message.content)
-    .join('\n')
+    .join('')
     .trim();
   if (text) return text;
 
@@ -576,6 +628,17 @@ export function collectChannelAgentReply(messages: AgentMessage[]): string {
   if (error?.message) return `Agent 执行失败：${error.message}`;
 
   return 'Agent 已完成，但没有生成可发送的文本回复。';
+}
+
+function shouldUseFullChannelAgent(request: {
+  inbound: ChannelInboundMessage;
+  assistant?: ChannelAssistantBinding;
+}): boolean {
+  return Boolean(
+    request.inbound.media?.length ||
+    request.assistant?.skillNames?.length ||
+    request.assistant?.mcpServerNames?.length
+  );
 }
 
 export const defaultChannelCommandRunner: ChannelCommandRunner = (
@@ -648,11 +711,27 @@ export function createChannelIntegrationService(
         return;
       }
 
+      if (!shouldUseFullChannelAgent(request)) {
+        yield* runChat(
+          request.prompt,
+          modelConfig,
+          'zh-CN',
+          request.conversation,
+          agentSession.abortController,
+          {
+            clientSessionId: request.session.id,
+            taskId: request.session.id,
+            origin: 'chat',
+          }
+        );
+        return;
+      }
+
       yield* runAgent(
         request.prompt,
         agentSession,
         request.conversation,
-        undefined,
+        createChannelWorkDir(request.inbound),
         request.session.id,
         modelConfig,
         undefined,
@@ -712,7 +791,10 @@ export function createChannelIntegrationService(
 
     const timestamp = nowIso();
     const session: ChannelConversationSession = {
-      id: `channel-${inbound.channel}-${nanoid(10)}`,
+      id: createStableChannelSessionId({
+        channel: inbound.channel,
+        conversationId: inbound.conversationId,
+      }),
       channel: inbound.channel,
       conversationType: inbound.conversationType,
       conversationId: inbound.conversationId,
@@ -891,8 +973,10 @@ export const channelIntegrationService = createChannelIntegrationService();
 export const weixinLoginManager = createWeixinLoginManager({
   inboundHandler: (message) =>
     channelIntegrationService.handleInboundMessage(message),
-  autoStartStoredConnection:
-    process.env.UNIINS_CLAW_DISABLE_WEIXIN_AUTO_START === '1'
-      ? false
-      : undefined,
+  autoStartStoredConnection: false,
 });
+
+export async function startChannelRuntime(): Promise<void> {
+  if (process.env.UNIINS_CLAW_DISABLE_WEIXIN_AUTO_START === '1') return;
+  await weixinLoginManager.resumeStoredConnection();
+}

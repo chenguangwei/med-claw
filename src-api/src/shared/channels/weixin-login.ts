@@ -174,6 +174,19 @@ function resolveAccountPath(stateDir: string, accountId: string): string {
   return path.join(resolveAccountsDir(stateDir), `${accountId}.json`);
 }
 
+function resolveBotLockPath(stateDir: string): string {
+  return path.join(resolveWeixinStateDir(stateDir), 'bot.lock');
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readAccountIds(stateDir: string): string[] {
   try {
     const raw = fs.readFileSync(resolveAccountIndexPath(stateDir), 'utf8');
@@ -245,6 +258,8 @@ export class WeixinLoginManager {
   private readonly startBot: WeixinStartBot;
   private readonly logout: WeixinLogout;
   private readonly stateDir: string;
+  private readonly botLockPath: string;
+  private ownsBotLock = false;
   private readonly sessions = new Map<string, ActiveLogin>();
   private botAbortController?: AbortController;
   private bot?: WeixinBotInstance;
@@ -263,6 +278,7 @@ export class WeixinLoginManager {
     this.startBot = options.startBot || sdkStart;
     this.logout = options.logout || sdkLogout;
     this.stateDir = resolveOpenClawStateDir(options.stateDir);
+    this.botLockPath = resolveBotLockPath(this.stateDir);
 
     if (options.autoStartStoredConnection !== false) {
       setTimeout(() => {
@@ -360,6 +376,7 @@ export class WeixinLoginManager {
     this.botAbortController?.abort();
     this.botAbortController = undefined;
     this.bot = undefined;
+    this.releaseBotLock();
     this.logout({ log: () => undefined });
     this.connection = {
       channel: 'weixin',
@@ -371,10 +388,65 @@ export class WeixinLoginManager {
     return this.getConnectionStatus();
   }
 
-  private async resumeStoredConnection(): Promise<void> {
+  async resumeStoredConnection(): Promise<void> {
     const accountId = readAccountIds(this.stateDir)[0];
     if (!accountId) return;
     await this.startConnectedBot(accountId);
+  }
+
+  private acquireBotLock(accountId: string): boolean {
+    const lock = {
+      pid: process.pid,
+      accountId,
+      createdAt: nowIso(),
+    };
+
+    fs.mkdirSync(path.dirname(this.botLockPath), { recursive: true });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        fs.writeFileSync(this.botLockPath, JSON.stringify(lock), {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+        this.ownsBotLock = true;
+        return true;
+      } catch {
+        try {
+          const current = JSON.parse(
+            fs.readFileSync(this.botLockPath, 'utf8')
+          ) as { pid?: number };
+          if (
+            typeof current.pid === 'number' &&
+            current.pid !== process.pid &&
+            isProcessAlive(current.pid)
+          ) {
+            return false;
+          }
+        } catch {
+          // Invalid lock files are treated as stale and replaced below.
+        }
+
+        try {
+          fs.rmSync(this.botLockPath, { force: true });
+        } catch {
+          return false;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private releaseBotLock(): void {
+    if (!this.ownsBotLock) return;
+    try {
+      fs.rmSync(this.botLockPath, { force: true });
+    } catch {
+      // Best effort cleanup; a stale lock is handled on the next acquire.
+    } finally {
+      this.ownsBotLock = false;
+    }
   }
 
   private async pollLogin(sessionId: string): Promise<void> {
@@ -520,6 +592,7 @@ export class WeixinLoginManager {
 
   private async startConnectedBot(accountId: string): Promise<void> {
     this.botAbortController?.abort();
+    this.releaseBotLock();
     const abortController = new AbortController();
     this.botAbortController = abortController;
 
@@ -532,25 +605,45 @@ export class WeixinLoginManager {
       updatedAt: nowIso(),
     };
 
+    if (!this.acquireBotLock(accountId)) {
+      this.connection = {
+        channel: 'weixin',
+        connected: false,
+        status: 'failed',
+        accountId,
+        message:
+          '另一个应用进程正在监听微信消息，请关闭重复的开发服务后重新连接。',
+        updatedAt: nowIso(),
+      };
+      return;
+    }
+
     const agent = this.createAgent();
-    const bot = this.startBot(agent, {
-      accountId,
-      abortSignal: abortController.signal,
-      log: () => undefined,
-    });
-    this.bot = bot;
-    this.connection = {
-      channel: 'weixin',
-      connected: true,
-      status: 'connected',
-      accountId,
-      message: '微信已连接。',
-      updatedAt: nowIso(),
-    };
+    let bot: WeixinBotInstance;
+    try {
+      bot = this.startBot(agent, {
+        accountId,
+        abortSignal: abortController.signal,
+        log: () => undefined,
+      });
+      this.bot = bot;
+      this.connection = {
+        channel: 'weixin',
+        connected: true,
+        status: 'connected',
+        accountId,
+        message: '微信已连接。',
+        updatedAt: nowIso(),
+      };
+    } catch (error) {
+      this.releaseBotLock();
+      throw error;
+    }
 
     bot.wait().catch((error) => {
       if (abortController.signal.aborted) return;
       this.bot = undefined;
+      this.releaseBotLock();
       this.connection = {
         channel: 'weixin',
         connected: false,

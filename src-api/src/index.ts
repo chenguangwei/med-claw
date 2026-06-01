@@ -17,6 +17,7 @@ import {
 } from '@/app/api';
 import { corsMiddleware } from '@/app/middleware/index.js';
 import { loadConfig } from '@/config/loader.js';
+import { startChannelRuntime } from '@/shared/channels/service';
 import {
   initProviderManager,
   shutdownProviderManager,
@@ -138,6 +139,7 @@ async function start() {
     fetch: app.fetch,
     port,
   });
+  await startChannelRuntime();
 }
 
 start().catch((error) => {
