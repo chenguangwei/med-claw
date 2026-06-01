@@ -23,11 +23,13 @@ import {
   HelpCircle,
   ListFilter,
   LogOut,
-  Plus,
+  MessageCircle,
   QrCode,
   RefreshCw,
   Send,
+  SlidersHorizontal,
   Trash2,
+  UserRound,
 } from 'lucide-react';
 
 import { Switch } from '@/components/settings/components/Switch';
@@ -35,6 +37,7 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -54,6 +57,11 @@ interface ChannelDefinition {
 }
 
 type ChannelConversationType = 'private' | 'group';
+type ChannelRouteTemplate =
+  | 'keywords'
+  | 'conversation'
+  | 'senderName'
+  | 'advanced';
 
 interface ChannelAssistantBinding {
   assistantId?: string;
@@ -230,6 +238,244 @@ const channelCopy: Record<
   },
 };
 
+interface GuideItem {
+  label: string;
+  description: string;
+}
+
+const commonGuideCopy: Record<'zh' | 'en', GuideItem[]> = {
+  zh: [
+    {
+      label: '启用开关',
+      description: '决定该渠道保存后是否接收并处理入站消息。',
+    },
+    {
+      label: '渠道默认助手',
+      description: '未命中任何路由规则时使用的兜底助手和系统提示词。',
+    },
+    {
+      label: '高级设置',
+      description:
+        '只在需要限制默认助手可用 Skills 或 MCP servers 时填写，普通接入可先保持为空。',
+    },
+    {
+      label: '助手路由规则',
+      description:
+        '按关键词、群/联系人、发送人或高级条件把同一渠道消息分配给不同助手。',
+    },
+    {
+      label: '测试入站消息',
+      description: '用模拟会话验证命中规则、使用助手和回复内容。',
+    },
+    {
+      label: '活跃会话',
+      description: '查看最近进入本应用的渠道会话，并打开对应本地助手会话。',
+    },
+  ],
+  en: [
+    {
+      label: 'Enable switch',
+      description:
+        'Controls whether this channel handles inbound messages after saving.',
+    },
+    {
+      label: 'Default assistant',
+      description:
+        'Fallback assistant and system prompt used when no routing rule matches.',
+    },
+    {
+      label: 'Advanced settings',
+      description:
+        'Only fill these when the default assistant must be limited to specific Skills or MCP servers.',
+    },
+    {
+      label: 'Assistant routing rules',
+      description:
+        'Route messages in the same channel to different assistants by keyword, chat/contact, sender, or advanced conditions.',
+    },
+    {
+      label: 'Test inbound message',
+      description:
+        'Use a simulated chat to verify the matched rule, selected assistant, and reply.',
+    },
+    {
+      label: 'Active sessions',
+      description:
+        'Review recent channel sessions and open the matching local assistant session.',
+    },
+  ],
+};
+
+const channelGuideCopy: Record<
+  ChannelId,
+  Record<'zh' | 'en', { title: string; items: GuideItem[] }>
+> = {
+  feishu: {
+    zh: {
+      title: '飞书配置项',
+      items: [
+        {
+          label: '获取授权指引',
+          description:
+            '生成管理员配置提示，用于在飞书开放平台完成应用权限和消息回调。',
+        },
+        {
+          label: '企业授权',
+          description:
+            '正式接入前需要管理员完成授权，确保消息事件能回调到本应用。',
+        },
+        {
+          label: '消息接收 / 自动回复',
+          description:
+            '配置完成后，飞书消息会进入本地助手会话，并由命中的助手回复。',
+        },
+        {
+          label: '刷新',
+          description: '外部授权或回调配置完成后，用于同步最新渠道状态。',
+        },
+      ],
+    },
+    en: {
+      title: 'Feishu settings',
+      items: [
+        {
+          label: 'Get setup guide',
+          description:
+            'Generates admin setup instructions for Feishu app permissions and message callbacks.',
+        },
+        {
+          label: 'Enterprise authorization',
+          description:
+            'An admin must authorize the app before message events can reach this app.',
+        },
+        {
+          label: 'Message intake / auto reply',
+          description:
+            'After setup, Feishu messages enter local assistant sessions and are replied to by the matched assistant.',
+        },
+        {
+          label: 'Refresh',
+          description:
+            'Sync the latest channel status after external authorization or callback setup.',
+        },
+      ],
+    },
+  },
+  weixin: {
+    zh: {
+      title: '微信配置项',
+      items: [
+        {
+          label: '微信连接状态',
+          description:
+            '展示当前微信是否已连接；连接后会显示账号信息，便于确认使用的是哪个账号。',
+        },
+        {
+          label: '连接微信 / 重新连接微信',
+          description:
+            '打开扫码弹窗。使用手机微信扫码并确认后，微信消息会进入本应用助手会话。',
+        },
+        {
+          label: '二维码弹窗',
+          description:
+            '二维码有有效期；过期、失败或取消后，可在弹窗里重新生成二维码。',
+        },
+        {
+          label: '断开连接',
+          description:
+            '停止当前微信账号连接；需要更换账号或暂停微信接入时使用。',
+        },
+        {
+          label: '保存配置',
+          description:
+            '保存启用状态、默认助手、路由规则和高级设置；扫码连接和配置保存是两个动作。',
+        },
+      ],
+    },
+    en: {
+      title: 'WeChat settings',
+      items: [
+        {
+          label: 'WeChat connection',
+          description:
+            'Shows whether WeChat is connected and displays the account after login.',
+        },
+        {
+          label: 'Connect / reconnect WeChat',
+          description:
+            'Opens the QR login dialog. After phone confirmation, WeChat messages enter assistant sessions.',
+        },
+        {
+          label: 'QR dialog',
+          description:
+            'QR codes expire. If login expires, fails, or is cancelled, generate a new QR code in the dialog.',
+        },
+        {
+          label: 'Disconnect',
+          description:
+            'Stops the current WeChat account connection when changing accounts or pausing WeChat intake.',
+        },
+        {
+          label: 'Save',
+          description:
+            'Saves enabled state, default assistant, routing rules, and advanced settings. QR login and saving settings are separate actions.',
+        },
+      ],
+    },
+  },
+  dingtalk: {
+    zh: {
+      title: '钉钉配置项',
+      items: [
+        {
+          label: 'Robot Code',
+          description:
+            '用于钉钉群机器人回复。需要群内自动回复时，先在钉钉开放平台获取并填写。',
+        },
+        {
+          label: '获取授权指引',
+          description:
+            '生成管理员配置提示，用于完成钉钉应用授权、消息回调和机器人配置。',
+        },
+        {
+          label: '群消息 / 机器人回复',
+          description:
+            '配置完成后，钉钉群消息可进入助手路由，并通过机器人发送回复。',
+        },
+        {
+          label: '刷新',
+          description: '管理员完成外部配置后，用于同步钉钉连接和可用能力状态。',
+        },
+      ],
+    },
+    en: {
+      title: 'DingTalk settings',
+      items: [
+        {
+          label: 'Robot Code',
+          description:
+            'Required for DingTalk group bot replies. Get it from the DingTalk developer platform before enabling group replies.',
+        },
+        {
+          label: 'Get setup guide',
+          description:
+            'Generates admin setup instructions for app authorization, message callbacks, and bot configuration.',
+        },
+        {
+          label: 'Group messages / bot replies',
+          description:
+            'After setup, DingTalk group messages can be routed to assistants and replied to through the bot.',
+        },
+        {
+          label: 'Refresh',
+          description:
+            'Sync DingTalk connection and capability status after the admin finishes external setup.',
+        },
+      ],
+    },
+  },
+};
+
 function splitList(value: string): string[] {
   return value
     .split(',')
@@ -239,6 +485,25 @@ function splitList(value: string): string[] {
 
 function joinList(value?: string[]): string {
   return Array.isArray(value) ? value.join(', ') : '';
+}
+
+function firstListValue(value?: string[]): string {
+  return Array.isArray(value) && value.length > 0 ? value[0] : '';
+}
+
+function formatRouteList(value?: string[], fallback = ''): string {
+  if (!value?.length) return fallback;
+  return value.slice(0, 3).join(', ');
+}
+
+function hasRouteAdvancedFields(route: ChannelAssistantRoute): boolean {
+  return Boolean(
+    route.match.senderIds?.length ||
+    route.match.regex ||
+    route.assistant.skillNames?.length ||
+    route.assistant.mcpServerNames?.length ||
+    route.assistant.prompt
+  );
 }
 
 function createRouteId(): string {
@@ -331,13 +596,14 @@ export function ChannelManagement() {
   const [authResult, setAuthResult] = useState<AuthSessionResult | null>(null);
   const [testConversationType, setTestConversationType] =
     useState<ChannelConversationType>('private');
-  const [testConversationId, setTestConversationId] = useState('');
-  const [testSenderId, setTestSenderId] = useState('');
   const [testSenderName, setTestSenderName] = useState('');
   const [testText, setTestText] = useState('');
   const [testResult, setTestResult] = useState<ChannelInboundTestResult | null>(
     null
   );
+  const [expandedAdvancedRouteIds, setExpandedAdvancedRouteIds] = useState<
+    string[]
+  >([]);
   const [guideOpen, setGuideOpen] = useState(false);
   const [weixinDialogOpen, setWeixinDialogOpen] = useState(false);
   const [weixinLogin, setWeixinLogin] = useState<WeixinLoginSession | null>(
@@ -358,11 +624,26 @@ export function ChannelManagement() {
     [selectedChannel, status?.bindings]
   );
   const selectedCopy = channelCopy[selectedChannel];
+  const guideLocale = isZh ? 'zh' : 'en';
+  const selectedGuideCopy = channelGuideCopy[selectedChannel][guideLocale];
+  const commonGuideItems = commonGuideCopy[guideLocale];
   const weixinConnection = useMemo(
     () => status?.connections?.find((item) => item.channel === 'weixin'),
     [status?.connections]
   );
   const weixinConnected = weixinConnection?.connected === true;
+  const selectedChannelSessions = useMemo(
+    () =>
+      status?.sessions
+        .filter((session) => session.channel === selectedChannel)
+        .slice()
+        .sort(
+          (left, right) =>
+            new Date(right.lastActiveAt).getTime() -
+            new Date(left.lastActiveAt).getTime()
+        ) || [],
+    [selectedChannel, status?.sessions]
+  );
 
   const [form, setForm] = useState({
     enabled: false,
@@ -616,17 +897,77 @@ export function ChannelManagement() {
     }));
   };
 
-  const addAssistantRoute = () => {
+  const createAssistantRouteFromTemplate = (
+    template: ChannelRouteTemplate,
+    priority: number
+  ): ChannelAssistantRoute => {
+    const route = createEmptyAssistantRoute(priority, assistantProfiles[0]);
+    const timestamp = new Date().toISOString();
+
+    if (template === 'conversation') {
+      return {
+        ...route,
+        name: isZh ? '指定群或联系人' : 'Specific chat or contact',
+        match: {
+          ...route.match,
+          conversationType: 'group',
+        },
+        updatedAt: timestamp,
+      };
+    }
+
+    if (template === 'senderName') {
+      return {
+        ...route,
+        name: isZh ? '指定发送人' : 'Specific sender',
+        match: {
+          ...route.match,
+          senderNames: [isZh ? '张三' : 'Alice'],
+        },
+        updatedAt: timestamp,
+      };
+    }
+
+    if (template === 'advanced') {
+      return {
+        ...route,
+        name: isZh ? '高级精确匹配' : 'Advanced exact match',
+        match: {
+          ...route.match,
+          conversationIds: [''],
+        },
+        updatedAt: timestamp,
+      };
+    }
+
+    return {
+      ...route,
+      name: isZh ? '售后关键词' : 'Support keywords',
+      match: {
+        ...route.match,
+        keywords: [isZh ? '退款' : 'refund', isZh ? '售后' : 'support'],
+      },
+      updatedAt: timestamp,
+    };
+  };
+
+  const addAssistantRoute = (template: ChannelRouteTemplate = 'keywords') => {
+    const nextRoute = createAssistantRouteFromTemplate(
+      template,
+      form.assistantRoutes.length + 1
+    );
     setForm((current) => ({
       ...current,
       assistantRoutes: normalizeRouteOrder([
         ...current.assistantRoutes,
-        createEmptyAssistantRoute(
-          current.assistantRoutes.length + 1,
-          assistantProfiles[0]
-        ),
+        nextRoute,
       ]),
     }));
+    if (template === 'advanced') {
+      setExpandedAdvancedRouteIds((current) =>
+        current.includes(nextRoute.id) ? current : [...current, nextRoute.id]
+      );
+    }
   };
 
   const updateAssistantRoute = (
@@ -643,6 +984,11 @@ export function ChannelManagement() {
 
   const applyRouteAssistantProfile = (routeId: string, assistantId: string) => {
     const assistant = assistantProfiles.find((item) => item.id === assistantId);
+    if (!assistant) {
+      setExpandedAdvancedRouteIds((current) =>
+        current.includes(routeId) ? current : [...current, routeId]
+      );
+    }
     updateAssistantRoute(routeId, (route) => ({
       ...route,
       assistant: assistant
@@ -659,6 +1005,9 @@ export function ChannelManagement() {
         current.assistantRoutes.filter((route) => route.id !== routeId)
       ),
     }));
+    setExpandedAdvancedRouteIds((current) =>
+      current.filter((id) => id !== routeId)
+    );
   };
 
   const moveAssistantRoute = (routeId: string, direction: -1 | 1) => {
@@ -677,6 +1026,14 @@ export function ChannelManagement() {
     });
   };
 
+  const toggleRouteAdvanced = (routeId: string) => {
+    setExpandedAdvancedRouteIds((current) =>
+      current.includes(routeId)
+        ? current.filter((id) => id !== routeId)
+        : [...current, routeId]
+    );
+  };
+
   const runTestInbound = async () => {
     const text = testText.trim();
     if (!text) return;
@@ -691,10 +1048,9 @@ export function ChannelManagement() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversationType: testConversationType,
-            conversationId:
-              testConversationId.trim() || `desktop-test-${selectedChannel}`,
-            senderId: testSenderId.trim() || undefined,
-            senderName: testSenderName.trim() || 'Desktop Test',
+            conversationId: `desktop-test-${selectedChannel}`,
+            senderName:
+              testSenderName.trim() || (isZh ? '测试用户' : 'Desktop Test'),
             text,
           }),
         }
@@ -901,398 +1257,650 @@ export function ChannelManagement() {
                   className="border-input bg-background text-foreground focus:ring-ring/50 min-h-20 w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-2"
                 />
               </label>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1.5">
-                  <span className="text-muted-foreground text-xs">
-                    {isZh ? 'Skills' : 'Skills'}
-                  </span>
-                  <input
-                    value={form.skillNames}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        assistantId: '',
-                        skillNames: event.target.value,
-                      }))
-                    }
-                    placeholder="lark-im, dingtalk-chat"
-                    className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                  />
-                </label>
-                <label className="space-y-1.5">
-                  <span className="text-muted-foreground text-xs">
-                    MCP servers
-                  </span>
-                  <input
-                    value={form.mcpServerNames}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        assistantId: '',
-                        mcpServerNames: event.target.value,
-                      }))
-                    }
-                    placeholder="internal-docs, crm"
-                    className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                  />
-                </label>
-              </div>
+              <details className="border-border bg-muted/20 rounded-lg border px-3 py-2">
+                <summary className="text-muted-foreground flex cursor-pointer items-center gap-2 text-xs font-medium">
+                  <SlidersHorizontal className="size-3.5" />
+                  {isZh ? '高级设置' : 'Advanced settings'}
+                </summary>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1.5">
+                    <span className="text-muted-foreground text-xs">
+                      {isZh ? '可用 Skills' : 'Skills'}
+                    </span>
+                    <input
+                      value={form.skillNames}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          assistantId: '',
+                          skillNames: event.target.value,
+                        }))
+                      }
+                      placeholder="lark-im, dingtalk-chat"
+                      className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-muted-foreground text-xs">
+                      MCP servers
+                    </span>
+                    <input
+                      value={form.mcpServerNames}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          assistantId: '',
+                          mcpServerNames: event.target.value,
+                        }))
+                      }
+                      placeholder="internal-docs, crm"
+                      className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                    />
+                  </label>
+                </div>
+              </details>
             </section>
 
             <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-foreground flex items-center gap-2 text-sm font-medium">
                   <ListFilter className="size-4" />
                   {isZh ? '助手路由规则' : 'Assistant routing rules'}
                 </h3>
-                <Button variant="outline" size="sm" onClick={addAssistantRoute}>
-                  <Plus className="size-4" />
-                  {isZh ? '添加规则' : 'Add rule'}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => addAssistantRoute('keywords')}
+                  >
+                    <MessageCircle className="size-4" />
+                    {isZh ? '按关键词' : 'Keywords'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => addAssistantRoute('conversation')}
+                  >
+                    <ListFilter className="size-4" />
+                    {isZh ? '按群/联系人' : 'Chat or contact'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => addAssistantRoute('senderName')}
+                  >
+                    <UserRound className="size-4" />
+                    {isZh ? '按发送人' : 'Sender'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => addAssistantRoute('advanced')}
+                  >
+                    <SlidersHorizontal className="size-4" />
+                    {isZh ? '高级条件' : 'Advanced'}
+                  </Button>
+                </div>
               </div>
+
+              <details className="border-border bg-muted/20 rounded-lg border px-3 py-2">
+                <summary className="text-muted-foreground cursor-pointer text-xs font-medium">
+                  {isZh ? '查看规则例子' : 'View examples'}
+                </summary>
+                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                  <div className="bg-background rounded-md border p-2">
+                    <div className="text-foreground font-medium">
+                      {isZh ? '售后问题' : 'Support issues'}
+                    </div>
+                    <p className="text-muted-foreground mt-1 leading-5">
+                      {isZh
+                        ? '消息包含“退款、售后、发票”时交给售后助手。'
+                        : 'Route refund, support, and invoice messages.'}
+                    </p>
+                  </div>
+                  <div className="bg-background rounded-md border p-2">
+                    <div className="text-foreground font-medium">
+                      {isZh ? 'VIP 群' : 'VIP group'}
+                    </div>
+                    <p className="text-muted-foreground mt-1 leading-5">
+                      {isZh
+                        ? '从最近会话选择 VIP 群，交给销售助手。'
+                        : 'Pick a recent VIP chat and route it to sales.'}
+                    </p>
+                  </div>
+                  <div className="bg-background rounded-md border p-2">
+                    <div className="text-foreground font-medium">
+                      {isZh ? '负责人消息' : 'Owner messages'}
+                    </div>
+                    <p className="text-muted-foreground mt-1 leading-5">
+                      {isZh
+                        ? '填写发送人名称，例如“王总”，交给优先助手。'
+                        : 'Route messages from named senders first.'}
+                    </p>
+                  </div>
+                </div>
+              </details>
 
               {form.assistantRoutes.length === 0 ? (
                 <div className="border-border bg-muted/30 text-muted-foreground rounded-lg border px-3 py-3 text-xs">
                   {isZh
-                    ? '暂无路由规则。未命中规则的消息会使用渠道默认助手。'
-                    : 'No routing rules. Unmatched messages use the default assistant.'}
+                    ? '暂无路由规则。大多数场景只需要渠道默认助手；需要分流时从上方模板添加。'
+                    : 'No routing rules. Most setups only need the default assistant; add a template when you need routing.'}
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {form.assistantRoutes.map((route, index) => (
-                    <div
-                      key={route.id}
-                      className="border-border bg-background rounded-lg border p-3"
-                    >
-                      <div className="mb-3 flex items-start justify-between gap-3">
-                        <div className="grid flex-1 gap-3 sm:grid-cols-[1fr_180px]">
-                          <label className="space-y-1.5">
-                            <span className="text-muted-foreground text-xs">
-                              {isZh ? '规则名称' : 'Rule name'}
-                            </span>
-                            <input
-                              value={route.name}
-                              onChange={(event) =>
+                  {form.assistantRoutes.map((route, index) => {
+                    const selectedConversationId = firstListValue(
+                      route.match.conversationIds
+                    );
+                    const selectedConversationExists =
+                      !!selectedConversationId &&
+                      selectedChannelSessions.some(
+                        (session) =>
+                          session.conversationId === selectedConversationId
+                      );
+                    const advancedOpen = expandedAdvancedRouteIds.includes(
+                      route.id
+                    );
+                    const advancedConfigured = hasRouteAdvancedFields(route);
+                    const matchSummary = [
+                      route.match.conversationType
+                        ? route.match.conversationType === 'group'
+                          ? isZh
+                            ? '群聊'
+                            : 'Group'
+                          : isZh
+                            ? '私聊'
+                            : 'Private'
+                        : undefined,
+                      route.match.keywords?.length
+                        ? `${isZh ? '关键词' : 'Keywords'}: ${formatRouteList(route.match.keywords)}`
+                        : undefined,
+                      route.match.senderNames?.length
+                        ? `${isZh ? '发送人' : 'Sender'}: ${formatRouteList(route.match.senderNames)}`
+                        : undefined,
+                      selectedConversationId
+                        ? `${isZh ? '会话' : 'Chat'}: ${selectedConversationId}`
+                        : undefined,
+                      route.match.senderIds?.length
+                        ? `${isZh ? '发送人 ID' : 'Sender ID'}: ${formatRouteList(route.match.senderIds)}`
+                        : undefined,
+                      route.match.regex
+                        ? isZh
+                          ? '正则匹配'
+                          : 'Regex match'
+                        : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
+
+                    return (
+                      <div
+                        key={route.id}
+                        className="border-border bg-background rounded-lg border p-3"
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div className="grid flex-1 gap-3 sm:grid-cols-[1fr_180px]">
+                            <label className="space-y-1.5">
+                              <span className="text-muted-foreground text-xs">
+                                {isZh ? '规则名称' : 'Rule name'}
+                              </span>
+                              <input
+                                value={route.name}
+                                onChange={(event) =>
+                                  updateAssistantRoute(route.id, (current) => ({
+                                    ...current,
+                                    name: event.target.value,
+                                    updatedAt: new Date().toISOString(),
+                                  }))
+                                }
+                                placeholder={
+                                  isZh
+                                    ? '例如：售后关键词'
+                                    : 'After-sales keywords'
+                                }
+                                className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                              />
+                            </label>
+                            <label className="space-y-1.5">
+                              <span className="text-muted-foreground text-xs">
+                                {isZh ? '使用助手' : 'Use assistant'}
+                              </span>
+                              <select
+                                value={route.assistant.assistantId || 'custom'}
+                                onChange={(event) =>
+                                  event.target.value === 'custom'
+                                    ? applyRouteAssistantProfile(
+                                        route.id,
+                                        'custom'
+                                      )
+                                    : applyRouteAssistantProfile(
+                                        route.id,
+                                        event.target.value
+                                      )
+                                }
+                                className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                              >
+                                <option value="custom">
+                                  {isZh ? '手动填写' : 'Manual'}
+                                </option>
+                                {assistantProfiles.map((assistant) => (
+                                  <option
+                                    key={assistant.id}
+                                    value={assistant.id}
+                                  >
+                                    {assistant.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <div className="flex items-center gap-1 pt-6">
+                            <Switch
+                              checked={route.enabled}
+                              onChange={(checked) =>
                                 updateAssistantRoute(route.id, (current) => ({
                                   ...current,
-                                  name: event.target.value,
+                                  enabled: checked,
                                   updatedAt: new Date().toISOString(),
                                 }))
                               }
-                              placeholder={
-                                isZh
-                                  ? '例如：售后关键词'
-                                  : 'After-sales keywords'
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => moveAssistantRoute(route.id, -1)}
+                              disabled={index === 0}
+                              aria-label={isZh ? '上移规则' : 'Move rule up'}
+                            >
+                              <ArrowUp className="size-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => moveAssistantRoute(route.id, 1)}
+                              disabled={
+                                index === form.assistantRoutes.length - 1
                               }
+                              aria-label={isZh ? '下移规则' : 'Move rule down'}
+                            >
+                              <ArrowDown className="size-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => removeAssistantRoute(route.id)}
+                              aria-label={isZh ? '删除规则' : 'Delete rule'}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        <p className="text-muted-foreground mb-3 text-xs">
+                          {matchSummary ||
+                            (isZh
+                              ? '还没有设置触发条件。未设置条件的规则不会生效。'
+                              : 'No trigger condition yet. Rules without conditions do not run.')}
+                        </p>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="space-y-1.5">
+                            <span className="text-muted-foreground text-xs">
+                              {isZh ? '消息来自' : 'Message from'}
+                            </span>
+                            <select
+                              value={route.match.conversationType || 'any'}
+                              onChange={(event) =>
+                                updateAssistantRoute(route.id, (current) => ({
+                                  ...current,
+                                  match: {
+                                    ...current.match,
+                                    conversationType:
+                                      event.target.value === 'any'
+                                        ? undefined
+                                        : (event.target
+                                            .value as ChannelConversationType),
+                                  },
+                                  updatedAt: new Date().toISOString(),
+                                }))
+                              }
+                              className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                            >
+                              <option value="any">
+                                {isZh ? '不限' : 'Any'}
+                              </option>
+                              <option value="private">
+                                {isZh ? '私聊' : 'Private'}
+                              </option>
+                              <option value="group">
+                                {isZh ? '群聊' : 'Group'}
+                              </option>
+                            </select>
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-muted-foreground text-xs">
+                              {isZh ? '指定最近会话' : 'Recent chat'}
+                            </span>
+                            <select
+                              value={selectedConversationId}
+                              disabled={
+                                selectedChannelSessions.length === 0 &&
+                                !selectedConversationId
+                              }
+                              onChange={(event) =>
+                                updateAssistantRoute(route.id, (current) => ({
+                                  ...current,
+                                  match: {
+                                    ...current.match,
+                                    conversationIds: event.target.value
+                                      ? [event.target.value]
+                                      : [],
+                                  },
+                                  updatedAt: new Date().toISOString(),
+                                }))
+                              }
+                              className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 disabled:opacity-60"
+                            >
+                              <option value="">
+                                {selectedChannelSessions.length > 0
+                                  ? isZh
+                                    ? '不限会话'
+                                    : 'Any chat'
+                                  : isZh
+                                    ? '暂无最近会话'
+                                    : 'No recent chats'}
+                              </option>
+                              {selectedConversationId &&
+                                !selectedConversationExists && (
+                                  <option value={selectedConversationId}>
+                                    {isZh ? '已保存会话：' : 'Saved chat: '}
+                                    {selectedConversationId}
+                                  </option>
+                                )}
+                              {selectedChannelSessions.map((session) => (
+                                <option
+                                  key={session.id}
+                                  value={session.conversationId}
+                                >
+                                  {session.conversationType === 'group'
+                                    ? isZh
+                                      ? '群聊'
+                                      : 'Group'
+                                    : isZh
+                                      ? '私聊'
+                                      : 'Private'}
+                                  {' · '}
+                                  {session.conversationId}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-muted-foreground text-xs">
+                              {isZh ? '发送人名称' : 'Sender names'}
+                            </span>
+                            <input
+                              value={joinList(route.match.senderNames)}
+                              onChange={(event) =>
+                                updateAssistantRoute(route.id, (current) => ({
+                                  ...current,
+                                  match: {
+                                    ...current.match,
+                                    senderNames: splitList(event.target.value),
+                                  },
+                                  updatedAt: new Date().toISOString(),
+                                }))
+                              }
+                              placeholder={isZh ? '张三, 李四' : 'Alice, Bob'}
                               className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
                             />
                           </label>
                           <label className="space-y-1.5">
                             <span className="text-muted-foreground text-xs">
-                              {isZh ? '使用助手' : 'Use assistant'}
+                              {isZh ? '消息关键词' : 'Message keywords'}
                             </span>
-                            <select
-                              value={route.assistant.assistantId || 'custom'}
+                            <input
+                              value={joinList(route.match.keywords)}
                               onChange={(event) =>
-                                event.target.value === 'custom'
-                                  ? applyRouteAssistantProfile(
-                                      route.id,
-                                      'custom'
-                                    )
-                                  : applyRouteAssistantProfile(
-                                      route.id,
-                                      event.target.value
-                                    )
+                                updateAssistantRoute(route.id, (current) => ({
+                                  ...current,
+                                  match: {
+                                    ...current.match,
+                                    keywords: splitList(event.target.value),
+                                  },
+                                  updatedAt: new Date().toISOString(),
+                                }))
+                              }
+                              placeholder={
+                                isZh ? '退款, 售后' : 'refund, support'
                               }
                               className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                            >
-                              <option value="custom">
-                                {isZh ? '手动填写' : 'Manual'}
-                              </option>
-                              {assistantProfiles.map((assistant) => (
-                                <option key={assistant.id} value={assistant.id}>
-                                  {assistant.name}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </label>
                         </div>
-                        <div className="flex items-center gap-1 pt-6">
-                          <Switch
-                            checked={route.enabled}
-                            onChange={(checked) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                enabled: checked,
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                          />
+
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
                           <Button
                             variant="ghost"
-                            size="icon-sm"
-                            onClick={() => moveAssistantRoute(route.id, -1)}
-                            disabled={index === 0}
-                            aria-label={isZh ? '上移规则' : 'Move rule up'}
+                            size="sm"
+                            onClick={() => toggleRouteAdvanced(route.id)}
                           >
-                            <ArrowUp className="size-4" />
+                            <SlidersHorizontal className="size-4" />
+                            {advancedOpen
+                              ? isZh
+                                ? '收起高级设置'
+                                : 'Hide advanced'
+                              : isZh
+                                ? '高级设置'
+                                : 'Advanced settings'}
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={() => moveAssistantRoute(route.id, 1)}
-                            disabled={index === form.assistantRoutes.length - 1}
-                            aria-label={isZh ? '下移规则' : 'Move rule down'}
-                          >
-                            <ArrowDown className="size-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={() => removeAssistantRoute(route.id)}
-                            aria-label={isZh ? '删除规则' : 'Delete rule'}
-                          >
-                            <Trash2 className="size-4" />
-                          </Button>
+                          {advancedConfigured && !advancedOpen && (
+                            <span className="bg-muted text-muted-foreground rounded px-2 py-1 text-xs">
+                              {isZh ? '已设置高级项' : 'Advanced fields set'}
+                            </span>
+                          )}
                         </div>
-                      </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            {isZh ? '角色名称' : 'Profile name'}
-                          </span>
-                          <input
-                            value={route.assistant.assistantName || ''}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                assistant: {
-                                  ...current.assistant,
-                                  assistantId: '',
-                                  assistantName: event.target.value,
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder={
-                              isZh ? '例如：售后助手' : 'After-sales assistant'
-                            }
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            {isZh ? '会话类型' : 'Conversation type'}
-                          </span>
-                          <select
-                            value={route.match.conversationType || 'any'}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                match: {
-                                  ...current.match,
-                                  conversationType:
-                                    event.target.value === 'any'
-                                      ? undefined
-                                      : (event.target
-                                          .value as ChannelConversationType),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          >
-                            <option value="any">{isZh ? '不限' : 'Any'}</option>
-                            <option value="private">
-                              {isZh ? '私聊' : 'Private'}
-                            </option>
-                            <option value="group">
-                              {isZh ? '群聊' : 'Group'}
-                            </option>
-                          </select>
-                        </label>
+                        {advancedOpen && (
+                          <div className="border-border bg-muted/20 mt-3 rounded-lg border p-3">
+                            <p className="text-muted-foreground mb-3 text-xs leading-5">
+                              {isZh
+                                ? '通常不用填写这些字段。只有需要精确匹配真实渠道 ID、正则表达式或工具范围时再使用。'
+                                : 'Most users can skip these fields. Use them for exact IDs, regex, or tool scope.'}
+                            </p>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="space-y-1.5">
+                                <span className="text-muted-foreground text-xs">
+                                  {isZh
+                                    ? '自定义角色名称'
+                                    : 'Custom profile name'}
+                                </span>
+                                <input
+                                  value={route.assistant.assistantName || ''}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        assistant: {
+                                          ...current.assistant,
+                                          assistantId: '',
+                                          assistantName: event.target.value,
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder={
+                                    isZh
+                                      ? '例如：售后助手'
+                                      : 'After-sales assistant'
+                                  }
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                              <label className="space-y-1.5">
+                                <span className="text-muted-foreground text-xs">
+                                  Conversation IDs
+                                </span>
+                                <input
+                                  value={joinList(route.match.conversationIds)}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        match: {
+                                          ...current.match,
+                                          conversationIds: splitList(
+                                            event.target.value
+                                          ),
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder="vip-room, customer-001"
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                              <label className="space-y-1.5">
+                                <span className="text-muted-foreground text-xs">
+                                  Sender IDs
+                                </span>
+                                <input
+                                  value={joinList(route.match.senderIds)}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        match: {
+                                          ...current.match,
+                                          senderIds: splitList(
+                                            event.target.value
+                                          ),
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder="user-001, user-002"
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                              <label className="space-y-1.5">
+                                <span className="text-muted-foreground text-xs">
+                                  Regex
+                                </span>
+                                <input
+                                  value={route.match.regex || ''}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        match: {
+                                          ...current.match,
+                                          regex: event.target.value,
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder="退款|售后|发票"
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                              <label className="space-y-1.5 sm:col-span-2">
+                                <span className="text-muted-foreground text-xs">
+                                  {isZh ? '系统提示词' : 'System prompt'}
+                                </span>
+                                <textarea
+                                  value={route.assistant.prompt || ''}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        assistant: {
+                                          ...current.assistant,
+                                          assistantId: '',
+                                          prompt: event.target.value,
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder={
+                                    isZh
+                                      ? '描述该规则命中时助手的回复边界和风格。'
+                                      : 'Describe the role used when this rule matches.'
+                                  }
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 min-h-16 w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                              <label className="space-y-1.5">
+                                <span className="text-muted-foreground text-xs">
+                                  Skills
+                                </span>
+                                <input
+                                  value={joinList(route.assistant.skillNames)}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        assistant: {
+                                          ...current.assistant,
+                                          assistantId: '',
+                                          skillNames: splitList(
+                                            event.target.value
+                                          ),
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder="crm, docs"
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                              <label className="space-y-1.5">
+                                <span className="text-muted-foreground text-xs">
+                                  MCP servers
+                                </span>
+                                <input
+                                  value={joinList(
+                                    route.assistant.mcpServerNames
+                                  )}
+                                  onChange={(event) =>
+                                    updateAssistantRoute(
+                                      route.id,
+                                      (current) => ({
+                                        ...current,
+                                        assistant: {
+                                          ...current.assistant,
+                                          assistantId: '',
+                                          mcpServerNames: splitList(
+                                            event.target.value
+                                          ),
+                                        },
+                                        updatedAt: new Date().toISOString(),
+                                      })
+                                    )
+                                  }
+                                  placeholder="internal-docs, crm"
+                                  className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        )}
                       </div>
-
-                      <label className="mt-3 block space-y-1.5">
-                        <span className="text-muted-foreground text-xs">
-                          {isZh ? '系统提示词' : 'System prompt'}
-                        </span>
-                        <textarea
-                          value={route.assistant.prompt || ''}
-                          onChange={(event) =>
-                            updateAssistantRoute(route.id, (current) => ({
-                              ...current,
-                              assistant: {
-                                ...current.assistant,
-                                assistantId: '',
-                                prompt: event.target.value,
-                              },
-                              updatedAt: new Date().toISOString(),
-                            }))
-                          }
-                          placeholder={
-                            isZh
-                              ? '描述该规则命中时助手的回复边界和风格。'
-                              : 'Describe the role used when this rule matches.'
-                          }
-                          className="border-input bg-background text-foreground focus:ring-ring/50 min-h-16 w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-2"
-                        />
-                      </label>
-
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            Conversation IDs
-                          </span>
-                          <input
-                            value={joinList(route.match.conversationIds)}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                match: {
-                                  ...current.match,
-                                  conversationIds: splitList(
-                                    event.target.value
-                                  ),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder="vip-room, customer-001"
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            Sender IDs
-                          </span>
-                          <input
-                            value={joinList(route.match.senderIds)}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                match: {
-                                  ...current.match,
-                                  senderIds: splitList(event.target.value),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder="user-001, user-002"
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            {isZh ? '发送人名称' : 'Sender names'}
-                          </span>
-                          <input
-                            value={joinList(route.match.senderNames)}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                match: {
-                                  ...current.match,
-                                  senderNames: splitList(event.target.value),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder={isZh ? '张三, 李四' : 'Alice, Bob'}
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            {isZh ? '关键词' : 'Keywords'}
-                          </span>
-                          <input
-                            value={joinList(route.match.keywords)}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                match: {
-                                  ...current.match,
-                                  keywords: splitList(event.target.value),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder={
-                              isZh ? '退款, 售后' : 'refund, support'
-                            }
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                      </div>
-
-                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                        <label className="space-y-1.5 sm:col-span-2">
-                          <span className="text-muted-foreground text-xs">
-                            Regex
-                          </span>
-                          <input
-                            value={route.match.regex || ''}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                match: {
-                                  ...current.match,
-                                  regex: event.target.value,
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder="退款|售后|发票"
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-muted-foreground text-xs">
-                            Skills
-                          </span>
-                          <input
-                            value={joinList(route.assistant.skillNames)}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                assistant: {
-                                  ...current.assistant,
-                                  assistantId: '',
-                                  skillNames: splitList(event.target.value),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder="crm, docs"
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                        <label className="space-y-1.5 sm:col-span-3">
-                          <span className="text-muted-foreground text-xs">
-                            MCP servers
-                          </span>
-                          <input
-                            value={joinList(route.assistant.mcpServerNames)}
-                            onChange={(event) =>
-                              updateAssistantRoute(route.id, (current) => ({
-                                ...current,
-                                assistant: {
-                                  ...current.assistant,
-                                  assistantId: '',
-                                  mcpServerNames: splitList(event.target.value),
-                                },
-                                updatedAt: new Date().toISOString(),
-                              }))
-                            }
-                            placeholder="internal-docs, crm"
-                            className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -1422,6 +2030,11 @@ export function ChannelManagement() {
               <h3 className="text-foreground mb-2 text-sm font-medium">
                 {isZh ? '测试入站消息' : 'Test inbound message'}
               </h3>
+              <p className="text-muted-foreground mb-3 text-xs leading-5">
+                {isZh
+                  ? '直接填写一条消息即可。系统会自动使用模拟会话，不需要填写 Conversation ID 或 Sender ID。'
+                  : 'Enter a message only. The app uses a simulated chat, so Conversation ID and Sender ID are not required.'}
+              </p>
               <div className="mb-2 grid gap-2">
                 <label className="space-y-1.5">
                   <span className="text-muted-foreground text-xs">
@@ -1439,30 +2052,6 @@ export function ChannelManagement() {
                     <option value="private">{isZh ? '私聊' : 'Private'}</option>
                     <option value="group">{isZh ? '群聊' : 'Group'}</option>
                   </select>
-                </label>
-                <label className="space-y-1.5">
-                  <span className="text-muted-foreground text-xs">
-                    Conversation ID
-                  </span>
-                  <input
-                    value={testConversationId}
-                    onChange={(event) =>
-                      setTestConversationId(event.target.value)
-                    }
-                    placeholder="conversationId"
-                    className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                  />
-                </label>
-                <label className="space-y-1.5">
-                  <span className="text-muted-foreground text-xs">
-                    Sender ID
-                  </span>
-                  <input
-                    value={testSenderId}
-                    onChange={(event) => setTestSenderId(event.target.value)}
-                    placeholder="senderId"
-                    className="border-input bg-background text-foreground focus:ring-ring/50 h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2"
-                  />
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-muted-foreground text-xs">
@@ -1639,56 +2228,130 @@ export function ChannelManagement() {
       </Dialog>
 
       <Dialog open={guideOpen} onOpenChange={setGuideOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>渠道管理操作指南</DialogTitle>
+            <DialogTitle>
+              {isZh ? '渠道管理操作指南' : 'Channel management guide'}
+            </DialogTitle>
+            <DialogDescription>
+              {isZh
+                ? '按当前渠道管理页面的配置流程说明接入、路由、测试和会话验证步骤。'
+                : 'Explains the current channel setup, routing, testing, and session verification flow.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 text-sm">
             <section className="space-y-2">
-              <h3 className="text-foreground font-semibold">这是什么</h3>
+              <h3 className="text-foreground font-semibold">
+                {isZh ? '这是什么' : 'What this does'}
+              </h3>
               <p className="text-muted-foreground leading-6">
-                渠道管理用于把飞书、微信、钉钉接到本应用。接好后，客户在这些渠道里发来的消息，会进入你配置的助手角色，由助手自动处理并回复。
+                {isZh
+                  ? '渠道管理用于把飞书、微信、钉钉接到本应用。接好后，客户在这些渠道里发来的消息会进入本地助手会话，并由你配置的默认助手或路由助手处理。'
+                  : 'Channel management connects Feishu, WeChat, and DingTalk to this app. Incoming messages become local assistant sessions and are handled by the default assistant or routing assistant you configure.'}
               </p>
             </section>
 
             <section className="space-y-2">
-              <h3 className="text-foreground font-semibold">第一次怎么用</h3>
+              <h3 className="text-foreground font-semibold">
+                {isZh ? '当前渠道配置说明' : 'Current channel settings'}
+              </h3>
+              <p className="text-muted-foreground leading-6">
+                {isZh
+                  ? '这里会根据当前选中的渠道展示对应配置项。需要查看微信、飞书或钉钉的说明时，先切换上方渠道卡片再打开指南。'
+                  : 'This section follows the currently selected channel. To see WeChat, Feishu, or DingTalk-specific notes, switch the channel card first and then open the guide.'}
+              </p>
+              <div className="rounded-lg border p-3">
+                <div className="text-foreground font-medium">
+                  {selectedGuideCopy.title}
+                </div>
+                <dl className="mt-3 grid gap-x-4 gap-y-3 sm:grid-cols-2">
+                  {[...commonGuideItems, ...selectedGuideCopy.items].map(
+                    (item) => (
+                      <div key={item.label} className="space-y-1">
+                        <dt className="text-foreground text-xs font-medium">
+                          {item.label}
+                        </dt>
+                        <dd className="text-muted-foreground text-xs leading-5">
+                          {item.description}
+                        </dd>
+                      </div>
+                    )
+                  )}
+                </dl>
+              </div>
+            </section>
+
+            <section className="space-y-2">
+              <h3 className="text-foreground font-semibold">
+                {isZh ? '推荐配置流程' : 'Recommended setup flow'}
+              </h3>
               <ol className="text-muted-foreground list-decimal space-y-2 pl-5 leading-6">
-                <li>先选择要接入的渠道，例如微信、飞书或钉钉。</li>
-                <li>打开右侧开关，表示这个渠道启用。</li>
-                <li>在“渠道默认助手”里选择已有助手，或填写一个兜底角色。</li>
                 <li>
-                  如需同一渠道使用多个助手，在“助手路由规则”里按联系人、群、发送人或关键词添加规则。
+                  {isZh
+                    ? '先从上方卡片选择要接入的渠道，例如微信、飞书或钉钉。'
+                    : 'Choose the channel card you want to connect, such as WeChat, Feishu, or DingTalk.'}
                 </li>
-                <li>点击“保存配置”。</li>
                 <li>
-                  微信点击“连接微信”并在弹窗中扫码；飞书和钉钉按企业授权提示完成管理员配置。
+                  {isZh
+                    ? '在渠道详情里打开启用开关，并在“渠道默认助手”选择已有助手，或手动填写兜底角色和系统提示词。'
+                    : 'Enable the channel in its detail panel, then choose an existing default assistant or manually enter the fallback role and system prompt.'}
+                </li>
+                <li>
+                  {isZh
+                    ? '高级设置只在需要限定 Skills 或 MCP servers 时填写；普通接入可以先保持为空。'
+                    : 'Use advanced settings only when the assistant must be limited to specific Skills or MCP servers; most setups can leave them empty.'}
+                </li>
+                <li>
+                  {isZh
+                    ? '如果同一渠道需要多个助手，使用“助手路由规则”按关键词、群/联系人、发送人或高级条件添加规则。规则按列表顺序优先匹配，没有触发条件的规则不会生效。'
+                    : 'If one channel needs multiple assistants, add routing rules by keyword, chat/contact, sender, or advanced conditions. Rules match in list order, and rules without trigger conditions do not run.'}
+                </li>
+                <li>
+                  {isZh
+                    ? '点击“保存配置”，再连接渠道：微信使用“连接微信”扫码，飞书和钉钉使用“获取授权指引”完成管理员配置；钉钉群机器人还需要填写 Robot Code。'
+                    : 'Click Save, then connect the channel: use Connect WeChat for QR login, or Get setup guide for Feishu and DingTalk admin setup. DingTalk group bots also require a Robot Code.'}
+                </li>
+                <li>
+                  {isZh
+                    ? '用右侧“测试入站消息”验证命中规则、使用助手和回复结果；产生真实或模拟会话后，可在“活跃会话”里打开对应会话。'
+                    : 'Use Test inbound message to verify the matched rule, selected assistant, and reply. After a real or simulated session exists, open it from Active sessions.'}
                 </li>
               </ol>
             </section>
 
             <section className="space-y-2">
               <h3 className="text-foreground font-semibold">
-                各渠道当前支持情况
+                {isZh ? '各渠道当前支持情况' : 'Current channel support'}
               </h3>
               <div className="grid gap-2">
                 <div className="rounded-lg border p-3">
-                  <div className="text-foreground font-medium">微信</div>
+                  <div className="text-foreground font-medium">
+                    {isZh ? '微信' : 'WeChat'}
+                  </div>
                   <p className="text-muted-foreground mt-1 leading-6">
-                    已支持应用内扫码连接。完成扫码确认后，微信消息会进入本应用助手会话。
+                    {isZh
+                      ? '已支持应用内扫码连接、连接状态展示、重新连接和断开连接。完成扫码确认后，微信消息会进入本应用助手会话。'
+                      : 'Supports in-app QR login, connection status, reconnect, and disconnect. After QR confirmation, WeChat messages enter assistant sessions in this app.'}
                   </p>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <div className="text-foreground font-medium">飞书</div>
+                  <div className="text-foreground font-medium">
+                    {isZh ? '飞书' : 'Feishu'}
+                  </div>
                   <p className="text-muted-foreground mt-1 leading-6">
-                    已支持授权接入和消息回复能力。正式使用前，需要在飞书开放平台配置应用权限和消息回调。
+                    {isZh
+                      ? '已支持授权接入、消息接收和自动回复能力。正式使用前，需要管理员在飞书开放平台配置应用权限和消息回调。'
+                      : 'Supports authorization, message intake, and automatic replies. Before production use, an admin must configure app permissions and message callbacks in the Feishu developer platform.'}
                   </p>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <div className="text-foreground font-medium">钉钉</div>
+                  <div className="text-foreground font-medium">
+                    {isZh ? '钉钉' : 'DingTalk'}
+                  </div>
                   <p className="text-muted-foreground mt-1 leading-6">
-                    已支持企业授权和机器人回复配置。正式使用前，需要管理员配置钉钉应用、消息回调和
-                    Robot Code。
+                    {isZh
+                      ? '已支持企业授权、群消息和机器人回复配置。正式使用前，需要管理员配置钉钉应用、消息回调和 Robot Code。'
+                      : 'Supports enterprise authorization, group messages, and bot reply setup. Before production use, an admin must configure the DingTalk app, message callback, and Robot Code.'}
                   </p>
                 </div>
               </div>
@@ -1696,10 +2359,12 @@ export function ChannelManagement() {
 
             <section className="space-y-2">
               <h3 className="text-foreground font-semibold">
-                怎么确认已经接好
+                {isZh ? '怎么确认已经接好' : 'How to confirm it works'}
               </h3>
               <p className="text-muted-foreground leading-6">
-                可以在右侧“测试入站消息”里填入会话信息和一句话并点击“运行测试”。下方会显示命中的规则、使用的助手和回复结果。
+                {isZh
+                  ? '可以在右侧“测试入站消息”里选择私聊或群聊，填写发送人名称和测试消息后点击“运行测试”。测试结果会展示命中规则、使用助手和回复内容；如果外部渠道刚完成配置，可先点击“刷新”同步最新状态。'
+                  : 'In Test inbound message, choose private or group chat, enter a sender name and test message, then click Run test. The result shows the matched rule, assistant, and reply. If an external channel was just configured, click Refresh to sync the latest status first.'}
               </p>
             </section>
           </div>
