@@ -105,8 +105,8 @@ interface MentionHighlightSegment {
 const capabilityOptions: CapabilityOption[] = [
   {
     id: SALES_DEMO_CAPABILITY_ID,
-    label: '销售演示',
-    instruction: '销售演示',
+    label: '销售助手',
+    instruction: '销售助手',
     icon: BadgeDollarSign,
   },
   {

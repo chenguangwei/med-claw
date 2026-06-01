@@ -533,6 +533,11 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
 
   const importSkill = useCallback(
     async (sourceUrl: string, skillName?: string, skillId?: string) => {
+      if (importingSkillId) {
+        setImportStatus('已有 Skill 正在引入，请稍候。');
+        return;
+      }
+
       const targetDir = skillsDirs.user || defaultSkillsPath || skillsDirs.app;
       if (!targetDir) {
         setImportStatus('未找到可用的 Skills 目录。');
@@ -540,7 +545,7 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
       }
 
       setImportingSkillId(skillId || sourceUrl);
-      setImportStatus(null);
+      setImportStatus('正在下载并引入 Skill，请稍候。');
       try {
         const response = await fetch(`${API_BASE_URL}/files/import-skill`, {
           method: 'POST',
@@ -597,7 +602,13 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
         setImportingSkillId(null);
       }
     },
-    [defaultSkillsPath, loadSkills, skillsDirs.app, skillsDirs.user]
+    [
+      defaultSkillsPath,
+      importingSkillId,
+      loadSkills,
+      skillsDirs.app,
+      skillsDirs.user,
+    ]
   );
 
   const plazaSkills = useMemo(() => {
@@ -774,6 +785,9 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
       skill={skill}
       variant={variant}
       importing={importingSkillId === skill.id}
+      importDisabled={
+        Boolean(importingSkillId) && importingSkillId !== skill.id
+      }
       onPrimaryAction={() => {
         if (skill.installed) {
           openFolderInSystem(
@@ -1141,13 +1155,14 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
               </button>
               <button
                 onClick={() => importSkill(githubUrl)}
-                disabled={!githubUrl.trim() || importingSkillId === githubUrl}
+                disabled={!githubUrl.trim() || Boolean(importingSkillId)}
+                aria-busy={Boolean(importingSkillId)}
                 className="flex h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {importingSkillId === githubUrl && (
+                {Boolean(importingSkillId) && (
                   <Loader2 className="size-4 animate-spin" />
                 )}
-                引入
+                {importingSkillId ? '引入中' : '引入'}
               </button>
             </div>
           </div>
@@ -1267,7 +1282,12 @@ export function SkillsPlaza({ settings, onSettingsChange }: SkillsPlazaProps) {
                               `hub-${skill.slug || skill.name}`
                             )
                           }
-                          disabled={installed || importing || !skill.source_url}
+                          disabled={
+                            installed ||
+                            Boolean(importingSkillId) ||
+                            !skill.source_url
+                          }
+                          aria-busy={importing}
                           className={cn(
                             'inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed',
                             installed
@@ -1689,11 +1709,13 @@ function SkillCardFooter({
   onPrimaryAction,
   dense,
   importing,
+  importDisabled,
 }: {
   skill: PlazaSkill;
   onPrimaryAction: () => void;
   dense?: boolean;
   importing?: boolean;
+  importDisabled?: boolean;
 }) {
   return (
     <div
@@ -1712,15 +1734,20 @@ function SkillCardFooter({
       </div>
       <button
         onClick={onPrimaryAction}
-        disabled={importing}
+        disabled={importing || importDisabled}
+        aria-busy={importing}
         className={cn(
-          'inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border px-6 text-sm font-semibold transition',
+          'inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border px-6 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
           skill.installed
             ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
             : 'border-orange-500 text-orange-600 hover:bg-orange-50'
         )}
       >
-        {skill.installed && <CircleCheck className="size-4" />}
+        {importing ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          skill.installed && <CircleCheck className="size-4" />
+        )}
         {importing ? '引入中' : skill.installed ? '已引入' : '引入'}
       </button>
     </div>

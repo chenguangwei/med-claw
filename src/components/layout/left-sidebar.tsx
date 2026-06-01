@@ -247,9 +247,11 @@ function dispatchAssistantSelection(assistant: SidebarAssistant) {
   );
 }
 
-function dispatchCollaborationSessionStart() {
+function dispatchCollaborationSessionStart(options?: { createNew?: boolean }) {
   window.dispatchEvent(
-    new CustomEvent('uniins-claw:collaboration-session-start')
+    new CustomEvent('uniins-claw:collaboration-session-start', {
+      detail: options,
+    })
   );
 }
 
@@ -3020,7 +3022,7 @@ function TaskAssistantPanel({
     dispatchAssistantSelection(
       createPrimaryAssistantProfile(t.nav.primaryAssistant)
     );
-    dispatchCollaborationSessionStart();
+    dispatchCollaborationSessionStart({ createNew: true });
   };
 
   const startNewSession = () => {
@@ -3330,7 +3332,7 @@ function TaskAssistantPanel({
               className="border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors"
             >
               <UsersRound className="size-3.5" />
-              协作会话
+              新建协作
             </button>
           </div>
         </div>

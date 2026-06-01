@@ -7,7 +7,7 @@
     "ver": "./scripts/version.sh",
     "dev": "vite",
     "dev:api": "pnpm --filter uniins-claw-api dev",
-    "predev:app": "node scripts/check-rust.js && node scripts/check-api-binary.js",
+    "predev:app": "node scripts/check-rust.js && node scripts/prepare-tauri-dev-config.js && node scripts/check-api-binary.js",
     "dev:tauri-services": "concurrently \"pnpm dev:api\" \"pnpm dev\"",
     "dev:app": "pnpm tauri dev",
     "dev:web": "pnpm dev",

@@ -1,10 +1,10 @@
-import { execFile } from 'child_process';
 import * as fs from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { promisify } from 'util';
 
-const execFileAsync = promisify(execFile);
+import JSZip from 'jszip';
+
+const GITHUB_ARCHIVE_DOWNLOAD_TIMEOUT_MS = 120000;
 
 export interface GitHubSkillSource {
   owner: string;
@@ -123,6 +123,105 @@ async function copyDir(src: string, dest: string): Promise<void> {
   }
 }
 
+function getGitHubArchiveUrl(source: GitHubSkillSource): string {
+  const refPath = source.ref ? `/${encodeURIComponent(source.ref)}` : '';
+  return `https://api.github.com/repos/${source.owner}/${source.repo}/zipball${refPath}`;
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function createTimeoutSignal(timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timeout),
+  };
+}
+
+async function extractGitHubArchive(archiveBytes: Uint8Array, destDir: string) {
+  const zip = await JSZip.loadAsync(archiveBytes);
+  const rootDir = path.resolve(destDir);
+  let extractedFiles = 0;
+
+  await Promise.all(
+    Object.values(zip.files).map(async (entry) => {
+      if (entry.dir) return;
+
+      const normalizedName = entry.name.replace(/\\/g, '/');
+      const parts = normalizedName.split('/').filter(Boolean);
+      if (parts.length <= 1) return;
+
+      // GitHub archives wrap repository contents in a generated top-level folder.
+      const relativeParts = parts.slice(1);
+      const destPath = path.resolve(rootDir, ...relativeParts);
+      if (!isPathInside(rootDir, destPath)) {
+        throw new Error('GitHub archive contains an unsafe file path');
+      }
+
+      const content = await entry.async('uint8array');
+      await fs.mkdir(path.dirname(destPath), { recursive: true });
+      await fs.writeFile(destPath, content);
+      extractedFiles += 1;
+    })
+  );
+
+  if (extractedFiles === 0) {
+    throw new Error('GitHub archive did not contain any importable files');
+  }
+}
+
+async function downloadGitHubArchive(
+  source: GitHubSkillSource,
+  destDir: string
+): Promise<void> {
+  await fs.mkdir(destDir, { recursive: true });
+
+  const archiveUrl = getGitHubArchiveUrl(source);
+  const timeout = createTimeoutSignal(GITHUB_ARCHIVE_DOWNLOAD_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(archiveUrl, {
+      signal: timeout.signal,
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'uniins-claw-skill-importer',
+      },
+    });
+  } catch (error) {
+    timeout.clear();
+    if (timeout.signal.aborted) {
+      throw new Error('Timed out downloading GitHub skill archive after 120 seconds');
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to download GitHub skill archive: ${message}`);
+  }
+
+  if (!response.ok) {
+    timeout.clear();
+    const detail = [response.status, response.statusText].filter(Boolean).join(' ');
+    throw new Error(`Failed to download GitHub skill archive: ${detail}`);
+  }
+
+  let archiveBytes: Uint8Array;
+  try {
+    archiveBytes = new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    if (timeout.signal.aborted) {
+      throw new Error('Timed out downloading GitHub skill archive after 120 seconds');
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to download GitHub skill archive: ${message}`);
+  } finally {
+    timeout.clear();
+  }
+
+  await extractGitHubArchive(archiveBytes, destDir);
+}
+
 async function findSkillDirsInCollection(
   collectionDir: string
 ): Promise<ResolvedSkillSourceDir[]> {
@@ -230,15 +329,9 @@ export async function importGitHubSkill(
 
   const tempRoot = await fs.mkdtemp(path.join(tmpdir(), 'uniins-claw-skill-'));
   const repoDir = path.join(tempRoot, source.repo);
-  const repoUrl = `https://github.com/${source.owner}/${source.repo}.git`;
-  const cloneArgs = ['clone', '--depth', '1'];
-  if (source.ref) {
-    cloneArgs.push('--branch', source.ref);
-  }
-  cloneArgs.push(repoUrl, repoDir);
 
   try {
-    await execFileAsync('git', cloneArgs, { timeout: 120000 });
+    await downloadGitHubArchive(source, repoDir);
     const sourceDirs = await resolveSkillSourceDirs(repoDir, source);
     if (sourceDirs.length > 1 && options.skillName) {
       throw new Error('Skill name override can only be used with a single skill source');

@@ -6,6 +6,7 @@ import {
   createChannelTaskSnapshot,
   syncChannelSessionsToLocalDb,
 } from '../../src/shared/lib/channel-session-sync.ts';
+import type { TaskStatus } from '../../src/shared/db/types.ts';
 
 test('buildLocalChannelSessionIds creates stable local task ids', () => {
   const first = buildLocalChannelSessionIds({
@@ -98,16 +99,23 @@ test('syncChannelSessionsToLocalDb serializes concurrent local rebuilds', async 
     status: 'idle' as const,
   };
   const { taskId } = buildLocalChannelSessionIds(channelSession);
-  const storedMessages: Array<{ task_id: string; type: string; content?: string }> =
-    [];
+  const storedMessages: Array<{
+    id: number;
+    task_id: string;
+    type: string;
+    content?: string;
+    created_at?: string;
+  }> = [];
   let deleteCalls = 0;
 
   const store = {
     async createMessage(input: { task_id: string; type: string; content?: string }) {
       storedMessages.push({
+        id: storedMessages.length + 1,
         task_id: input.task_id,
         type: input.type,
         content: input.content,
+        created_at: '2026-06-01T09:00:00.000Z',
       });
     },
     async createSession() {},
@@ -142,6 +150,9 @@ test('syncChannelSessionsToLocalDb serializes concurrent local rebuilds', async 
         updated_at: '2026-06-01T09:00:00.000Z',
       };
     },
+    async getMessagesByTaskId() {
+      return storedMessages;
+    },
     async updateTask() {},
   };
 
@@ -164,6 +175,118 @@ test('syncChannelSessionsToLocalDb serializes concurrent local rebuilds', async 
       {
         type: 'text',
         content: '可以从规则库配置入口获取。',
+      },
+    ]
+  );
+});
+
+test('syncChannelSessionsToLocalDb ignores stale snapshots that would remove newer replies', async () => {
+  const completedSession = {
+    id: 'channel-weixin-runtime',
+    channel: 'weixin' as const,
+    conversationId: 'wx-user-stale',
+    history: [
+      {
+        role: 'user' as const,
+        content: '请介绍理赔规则',
+        at: '2026-06-01T09:00:00.000Z',
+      },
+      {
+        role: 'assistant' as const,
+        content: '理赔规则包括报案、审核和赔付。',
+        at: '2026-06-01T09:00:05.000Z',
+      },
+    ],
+    lastActiveAt: '2026-06-01T09:00:05.000Z',
+    status: 'idle' as const,
+  };
+  const staleRunningSession = {
+    ...completedSession,
+    history: completedSession.history.slice(0, 1),
+    lastActiveAt: '2026-06-01T09:00:00.000Z',
+    status: 'running' as const,
+  };
+  const { taskId } = buildLocalChannelSessionIds(completedSession);
+  const storedMessages: Array<{
+    id: number;
+    task_id: string;
+    type: string;
+    content?: string;
+    created_at?: string;
+  }> = [];
+  let taskStatus: TaskStatus = 'running';
+
+  const store = {
+    async createMessage(input: {
+      task_id: string;
+      type: string;
+      content?: string;
+      created_at?: string;
+    }) {
+      storedMessages.push({
+        id: storedMessages.length + 1,
+        task_id: input.task_id,
+        type: input.type,
+        content: input.content,
+        created_at: input.created_at,
+      });
+    },
+    async createSession() {},
+    async createTask() {},
+    async deleteMessagesByTaskId(id: string) {
+      assert.equal(id, taskId);
+      storedMessages.length = 0;
+    },
+    async getSession() {
+      return {
+        id: 'channel-weixin-stale',
+        prompt: '微信会话：wx-user-stale',
+        task_count: 1,
+        created_at: '2026-06-01T09:00:00.000Z',
+        updated_at: '2026-06-01T09:00:00.000Z',
+      };
+    },
+    async getTask() {
+      return {
+        id: taskId,
+        session_id: 'channel-weixin-stale',
+        task_index: 1,
+        prompt: '微信：请介绍理赔规则',
+        status: taskStatus,
+        cost: null,
+        duration: null,
+        created_at: '2026-06-01T09:00:00.000Z',
+        updated_at: '2026-06-01T09:00:00.000Z',
+      };
+    },
+    async getMessagesByTaskId() {
+      return storedMessages;
+    },
+    async updateTask(_id: string, input: { status?: TaskStatus }) {
+      if (input.status) taskStatus = input.status;
+    },
+  };
+
+  await syncChannelSessionsToLocalDb([completedSession], store);
+  await syncChannelSessionsToLocalDb([staleRunningSession], store);
+
+  assert.equal(taskStatus, 'completed');
+  assert.deepEqual(
+    storedMessages.map((message) => ({
+      type: message.type,
+      content: message.content,
+      created_at: message.created_at,
+    })),
+    [
+      {
+        type: 'user',
+        content: '请介绍理赔规则',
+        created_at: '2026-06-01T09:00:00.000Z',
+      },
+      {
+        type: 'text',
+        content: '理赔规则包括报案、审核和赔付。',
+        created_at: '2026-06-01T09:00:05.000Z',
       },
     ]
   );

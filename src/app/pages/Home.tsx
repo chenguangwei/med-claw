@@ -49,6 +49,7 @@ import {
   MapPin,
   MonitorSmartphone,
   Network,
+  Pencil,
   Phone,
   Plus,
   Radar,
@@ -56,6 +57,7 @@ import {
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   UserPlus,
   UserRound,
   WalletCards,
@@ -145,6 +147,15 @@ interface CollaborationPeer {
   status: 'online' | 'busy';
   address?: string | null;
   source?: 'lan' | 'local';
+}
+
+interface CollaborationDraftSession {
+  id: string;
+  title: string;
+  assistantIds: CollaborationAssistant['id'][];
+  peerIds: CollaborationPeer['id'][];
+  createdAt: string;
+  updatedAt: string;
 }
 
 type MockDetail =
@@ -307,6 +318,113 @@ const defaultCollaborationAssistantIds: CollaborationAssistant['id'][] = [
 const initialCollaborationPeers: CollaborationPeer[] = [];
 
 const defaultCollaborationPeerIds: string[] = [];
+
+const COLLABORATION_SESSIONS_STORAGE_KEY =
+  'uniins-claw:collaboration-draft-sessions';
+
+function createCollaborationDraftSession(
+  index: number
+): CollaborationDraftSession {
+  const now = new Date().toISOString();
+  const cryptoApi = typeof window !== 'undefined' ? window.crypto : undefined;
+  const id =
+    cryptoApi && 'randomUUID' in cryptoApi
+      ? `collaboration-${cryptoApi.randomUUID()}`
+      : `collaboration-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  return {
+    id,
+    title: `协作会话 ${index}`,
+    assistantIds: [...defaultCollaborationAssistantIds],
+    peerIds: [...defaultCollaborationPeerIds],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function isCollaborationAssistantId(
+  value: unknown
+): value is CollaborationAssistant['id'] {
+  return collaborationAssistants.some((assistant) => assistant.id === value);
+}
+
+function loadCollaborationDraftSessions(): CollaborationDraftSession[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(COLLABORATION_SESSIONS_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((item): CollaborationDraftSession | null => {
+        if (!item || typeof item !== 'object') return null;
+
+        const value = item as Partial<CollaborationDraftSession>;
+        if (typeof value.id !== 'string' || typeof value.title !== 'string') {
+          return null;
+        }
+
+        const assistantIds = Array.isArray(value.assistantIds)
+          ? value.assistantIds.filter(isCollaborationAssistantId)
+          : [];
+        const peerIds = Array.isArray(value.peerIds)
+          ? value.peerIds.filter(
+              (peerId): peerId is string => typeof peerId === 'string'
+            )
+          : [];
+
+        return {
+          id: value.id,
+          title: value.title,
+          assistantIds:
+            assistantIds.length > 0
+              ? assistantIds
+              : [...defaultCollaborationAssistantIds],
+          peerIds,
+          createdAt:
+            typeof value.createdAt === 'string'
+              ? value.createdAt
+              : new Date().toISOString(),
+          updatedAt:
+            typeof value.updatedAt === 'string'
+              ? value.updatedAt
+              : new Date().toISOString(),
+        };
+      })
+      .filter((item): item is CollaborationDraftSession => Boolean(item));
+  } catch {
+    return [];
+  }
+}
+
+function saveCollaborationDraftSessions(sessions: CollaborationDraftSession[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(
+    COLLABORATION_SESSIONS_STORAGE_KEY,
+    JSON.stringify(sessions)
+  );
+}
+
+function getCollaborationSessionTitle(prompt: string) {
+  const title = prompt.replace(/\s+/g, ' ').trim();
+  if (!title) return '协作会话';
+  return title.length > 24 ? `${title.slice(0, 24)}...` : title;
+}
+
+function formatCollaborationSessionTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '刚刚';
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
 
 const collaborationQuickPrompts = [
   '把今天客户跟进会拉成协作任务：成员负责客户异议和资料确认，@销售助手 输出下一通电话话术。',
@@ -696,21 +814,41 @@ function HomeContent() {
   const [demoCompleted, setDemoCompleted] = useState(false);
   const [mockDetail, setMockDetail] = useState<MockDetail | null>(null);
   const [collaborationActive, setCollaborationActive] = useState(false);
-  const [collaborationAssistantIds, setCollaborationAssistantIds] = useState<
-    CollaborationAssistant['id'][]
-  >(defaultCollaborationAssistantIds);
+  const [collaborationSessions, setCollaborationSessions] = useState<
+    CollaborationDraftSession[]
+  >(() => loadCollaborationDraftSessions());
+  const [activeCollaborationSessionId, setActiveCollaborationSessionId] =
+    useState<string | null>(
+      () => loadCollaborationDraftSessions()[0]?.id ?? null
+    );
   const [availableCollaborationPeers, setAvailableCollaborationPeers] =
     useState<CollaborationPeer[]>(initialCollaborationPeers);
-  const [collaborationPeerIds, setCollaborationPeerIds] = useState<string[]>(
-    defaultCollaborationPeerIds
-  );
   const [collaborationRunning, setCollaborationRunning] = useState(false);
+  const [collaborationRenameSession, setCollaborationRenameSession] =
+    useState<CollaborationDraftSession | null>(null);
+  const [collaborationRenameValue, setCollaborationRenameValue] = useState('');
+  const [collaborationDeleteSession, setCollaborationDeleteSession] =
+    useState<CollaborationDraftSession | null>(null);
   const demoMessagesEndRef = useRef<HTMLDivElement>(null);
   const demoRunRef = useRef(0);
   const navigate = useNavigate();
 
   const hasDemoConversation = demoMessages.length > 0 || demoRunning;
   const nextDemoStep = salesDemoSteps[demoStepIndex];
+  const activeCollaborationSession = useMemo(
+    () =>
+      collaborationSessions.find(
+        (session) => session.id === activeCollaborationSessionId
+      ) ||
+      collaborationSessions[0] ||
+      null,
+    [activeCollaborationSessionId, collaborationSessions]
+  );
+  const collaborationAssistantIds = activeCollaborationSession?.assistantIds
+    .length
+    ? activeCollaborationSession.assistantIds
+    : defaultCollaborationAssistantIds;
+  const collaborationPeerIds = activeCollaborationSession?.peerIds ?? [];
   const activeCollaborationAssistants = collaborationAssistantIds
     .map(getCollaborationAssistant)
     .filter(Boolean) as CollaborationAssistant[];
@@ -742,6 +880,10 @@ function HomeContent() {
       behavior: 'smooth',
     });
   }, [demoMessages]);
+
+  useEffect(() => {
+    saveCollaborationDraftSessions(collaborationSessions);
+  }, [collaborationSessions]);
 
   const updateDemoMessage = useCallback(
     (messageId: string, patch: Partial<DemoMessage>) => {
@@ -776,34 +918,56 @@ function HomeContent() {
     setDemoCompleted(false);
   }, []);
 
-  const loadLanCollaborationPeers = useCallback(async () => {
-    if (!isTauri()) {
-      return;
-    }
+  const loadLanCollaborationPeers = useCallback(
+    async (sessionId?: string) => {
+      const targetSessionId = sessionId || activeCollaborationSessionId;
 
-    try {
-      const peers = await invoke<CollaborationPeer[]>(
-        'discover_lan_collaboration_peers'
-      );
-      if (peers.length === 0) return;
+      if (!isTauri()) {
+        return;
+      }
 
-      setAvailableCollaborationPeers(peers);
-      setCollaborationPeerIds((current) => {
-        const validIds = new Set(peers.map((peer) => peer.id));
-        const stillAvailable = current.filter((peerId) => validIds.has(peerId));
+      try {
+        const peers = await invoke<CollaborationPeer[]>(
+          'discover_lan_collaboration_peers'
+        );
+        if (peers.length === 0) return;
 
-        if (stillAvailable.length > 0) {
-          return stillAvailable;
-        }
+        setAvailableCollaborationPeers(peers);
+        if (!targetSessionId) return;
 
-        return peers.slice(0, Math.min(2, peers.length)).map((peer) => peer.id);
-      });
-    } catch (error) {
-      console.warn('[Home] LAN collaboration discovery failed:', error);
-    }
-  }, []);
+        setCollaborationSessions((current) => {
+          const validIds = new Set(peers.map((peer) => peer.id));
+          const now = new Date().toISOString();
 
-  const startCollaborationSession = useCallback(() => {
+          return current.map((session) => {
+            if (session.id !== targetSessionId) return session;
+
+            const stillAvailable = session.peerIds.filter((peerId) =>
+              validIds.has(peerId)
+            );
+            const peerIds =
+              stillAvailable.length > 0
+                ? stillAvailable
+                : peers
+                    .slice(0, Math.min(2, peers.length))
+                    .map((peer) => peer.id);
+
+            return { ...session, peerIds, updatedAt: now };
+          });
+        });
+      } catch (error) {
+        console.warn('[Home] LAN collaboration discovery failed:', error);
+      }
+    },
+    [activeCollaborationSessionId]
+  );
+
+  const createCollaborationSession = useCallback(() => {
+    const session = createCollaborationDraftSession(
+      collaborationSessions.length + 1
+    );
+    setCollaborationSessions((current) => [session, ...current]);
+    setActiveCollaborationSessionId(session.id);
     setCollaborationActive(true);
     setSalesDemoActive(false);
     setAssistantExecutionScope(undefined);
@@ -811,15 +975,135 @@ function HomeContent() {
     setActiveCategory(null);
     resetSalesDemo();
     setPendingPrompt('');
-    void loadLanCollaborationPeers();
-  }, [loadLanCollaborationPeers, resetSalesDemo]);
+    void loadLanCollaborationPeers(session.id);
+  }, [collaborationSessions.length, loadLanCollaborationPeers, resetSalesDemo]);
+
+  const startCollaborationSession = useCallback(
+    (options: { createNew?: boolean } = {}) => {
+      if (options.createNew) {
+        createCollaborationSession();
+        return;
+      }
+
+      let targetSessionId = activeCollaborationSession?.id || null;
+
+      if (!targetSessionId) {
+        const session = createCollaborationDraftSession(1);
+        targetSessionId = session.id;
+        setCollaborationSessions([session]);
+      }
+
+      if (targetSessionId) {
+        setActiveCollaborationSessionId(targetSessionId);
+      }
+      setCollaborationActive(true);
+      setSalesDemoActive(false);
+      setAssistantExecutionScope(undefined);
+      setSelectedCapabilityId(null);
+      setActiveCategory(null);
+      resetSalesDemo();
+      setPendingPrompt('');
+      void loadLanCollaborationPeers(targetSessionId || undefined);
+    },
+    [
+      activeCollaborationSession?.id,
+      createCollaborationSession,
+      loadLanCollaborationPeers,
+      resetSalesDemo,
+    ]
+  );
+
+  const selectCollaborationSession = useCallback(
+    (sessionId: string) => {
+      setActiveCollaborationSessionId(sessionId);
+      setCollaborationActive(true);
+      setSalesDemoActive(false);
+      setAssistantExecutionScope(undefined);
+      setSelectedCapabilityId(null);
+      setActiveCategory(null);
+      resetSalesDemo();
+      setPendingPrompt('');
+      void loadLanCollaborationPeers(sessionId);
+    },
+    [loadLanCollaborationPeers, resetSalesDemo]
+  );
+
+  const openRenameCollaborationSession = useCallback(
+    (session: CollaborationDraftSession) => {
+      setCollaborationRenameSession(session);
+      setCollaborationRenameValue(session.title);
+    },
+    []
+  );
+
+  const closeRenameCollaborationSession = useCallback(() => {
+    setCollaborationRenameSession(null);
+    setCollaborationRenameValue('');
+  }, []);
+
+  const confirmRenameCollaborationSession = useCallback(() => {
+    const title = collaborationRenameValue.trim();
+    if (!collaborationRenameSession || !title) return;
+
+    setCollaborationSessions((current) =>
+      current.map((session) =>
+        session.id === collaborationRenameSession.id
+          ? {
+              ...session,
+              title,
+              updatedAt: new Date().toISOString(),
+            }
+          : session
+      )
+    );
+    closeRenameCollaborationSession();
+  }, [
+    closeRenameCollaborationSession,
+    collaborationRenameSession,
+    collaborationRenameValue,
+  ]);
+
+  const requestDeleteCollaborationSession = useCallback(
+    (session: CollaborationDraftSession) => {
+      setCollaborationDeleteSession(session);
+    },
+    []
+  );
+
+  const closeDeleteCollaborationSession = useCallback(() => {
+    setCollaborationDeleteSession(null);
+  }, []);
+
+  const confirmDeleteCollaborationSession = useCallback(() => {
+    if (!collaborationDeleteSession) return;
+
+    const nextSessions = collaborationSessions.filter(
+      (session) => session.id !== collaborationDeleteSession.id
+    );
+
+    if (nextSessions.length === 0) {
+      const replacement = createCollaborationDraftSession(1);
+      setCollaborationSessions([replacement]);
+      setActiveCollaborationSessionId(replacement.id);
+    } else {
+      setCollaborationSessions(nextSessions);
+      if (activeCollaborationSessionId === collaborationDeleteSession.id) {
+        setActiveCollaborationSessionId(nextSessions[0].id);
+      }
+    }
+
+    closeDeleteCollaborationSession();
+  }, [
+    activeCollaborationSessionId,
+    closeDeleteCollaborationSession,
+    collaborationDeleteSession,
+    collaborationSessions,
+  ]);
 
   const startNewSession = useCallback(() => {
     setCollaborationActive(false);
     setCollaborationRunning(false);
-    setCollaborationAssistantIds(defaultCollaborationAssistantIds);
     setAvailableCollaborationPeers(initialCollaborationPeers);
-    setCollaborationPeerIds(defaultCollaborationPeerIds);
     setSalesDemoActive(false);
     setAssistantExecutionScope(undefined);
     setSelectedCapabilityId(null);
@@ -881,6 +1165,10 @@ function HomeContent() {
       );
       setAssistantExecutionScope(buildAssistantExecutionScopeFromEvent(detail));
     };
+    const handleCollaborationStart = (event: Event) => {
+      const detail = (event as CustomEvent<{ createNew?: boolean }>).detail;
+      startCollaborationSession(detail);
+    };
 
     window.addEventListener(
       'uniins-claw:assistant-selected',
@@ -888,7 +1176,7 @@ function HomeContent() {
     );
     window.addEventListener(
       'uniins-claw:collaboration-session-start',
-      startCollaborationSession
+      handleCollaborationStart
     );
     window.addEventListener('uniins-claw:new-session-start', startNewSession);
 
@@ -899,7 +1187,7 @@ function HomeContent() {
       );
       window.removeEventListener(
         'uniins-claw:collaboration-session-start',
-        startCollaborationSession
+        handleCollaborationStart
       );
       window.removeEventListener(
         'uniins-claw:new-session-start',
@@ -1046,26 +1334,50 @@ function HomeContent() {
   const handleToggleCollaborationAssistant = (
     assistantId: CollaborationAssistant['id']
   ) => {
-    setCollaborationAssistantIds((current) => {
-      if (current.includes(assistantId)) {
-        return current.length > 1
-          ? current.filter((id) => id !== assistantId)
-          : current;
-      }
+    if (!activeCollaborationSession) return;
 
-      return [...current, assistantId];
+    setCollaborationSessions((current) => {
+      const now = new Date().toISOString();
+
+      return current.map((session) => {
+        if (session.id !== activeCollaborationSession.id) return session;
+
+        const nextAssistantIds = session.assistantIds.includes(assistantId)
+          ? session.assistantIds.length > 1
+            ? session.assistantIds.filter((id) => id !== assistantId)
+            : session.assistantIds
+          : [...session.assistantIds, assistantId];
+
+        return {
+          ...session,
+          assistantIds: nextAssistantIds,
+          updatedAt: now,
+        };
+      });
     });
   };
 
   const handleToggleCollaborationPeer = (peerId: CollaborationPeer['id']) => {
-    setCollaborationPeerIds((current) => {
-      if (current.includes(peerId)) {
-        return current.length > 1
-          ? current.filter((id) => id !== peerId)
-          : current;
-      }
+    if (!activeCollaborationSession) return;
 
-      return [...current, peerId];
+    setCollaborationSessions((current) => {
+      const now = new Date().toISOString();
+
+      return current.map((session) => {
+        if (session.id !== activeCollaborationSession.id) return session;
+
+        const nextPeerIds = session.peerIds.includes(peerId)
+          ? session.peerIds.length > 1
+            ? session.peerIds.filter((id) => id !== peerId)
+            : session.peerIds
+          : [...session.peerIds, peerId];
+
+        return {
+          ...session,
+          peerIds: nextPeerIds,
+          updatedAt: now,
+        };
+      });
     });
   };
 
@@ -1101,6 +1413,21 @@ function HomeContent() {
           activeCollaborationPeers
         );
         const sessionId = generateSessionId(prompt);
+        const draftSessionId = activeCollaborationSession?.id;
+
+        if (draftSessionId) {
+          setCollaborationSessions((current) =>
+            current.map((session) =>
+              session.id === draftSessionId
+                ? {
+                    ...session,
+                    title: getCollaborationSessionTitle(prompt),
+                    updatedAt: new Date().toISOString(),
+                  }
+                : session
+            )
+          );
+        }
 
         try {
           await createSession({ id: sessionId, prompt });
@@ -1128,6 +1455,7 @@ function HomeContent() {
       }
     },
     [
+      activeCollaborationSession?.id,
       activeCollaborationAssistants,
       activeCollaborationPeers,
       collaborationAssistantIds,
@@ -1352,11 +1680,17 @@ function HomeContent() {
 
             {collaborationActive ? (
               <CollaborationStartPanel
+                sessions={collaborationSessions}
+                activeSessionId={activeCollaborationSession?.id ?? null}
                 activeAssistants={activeCollaborationAssistants}
                 activePeers={activeCollaborationPeers}
                 availablePeers={availableCollaborationPeers}
                 assistantIds={collaborationAssistantIds}
                 peerIds={collaborationPeerIds}
+                onSelectSession={selectCollaborationSession}
+                onCreateSession={createCollaborationSession}
+                onRenameSession={openRenameCollaborationSession}
+                onDeleteSession={requestDeleteCollaborationSession}
                 onToggleAssistant={handleToggleCollaborationAssistant}
                 onTogglePeer={handleToggleCollaborationPeer}
                 onPromptClick={handleCollaborationQuickPrompt}
@@ -1434,6 +1768,96 @@ function HomeContent() {
         </div>
       </div>
 
+      <Dialog
+        open={!!collaborationRenameSession}
+        onOpenChange={(open) => {
+          if (!open) closeRenameCollaborationSession();
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>重命名协作会话</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <label className="block">
+              <span className="text-sm font-semibold text-slate-700">
+                会话名称
+              </span>
+              <input
+                value={collaborationRenameValue}
+                onChange={(event) =>
+                  setCollaborationRenameValue(event.target.value)
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    confirmRenameCollaborationSession();
+                  }
+                }}
+                autoFocus
+                maxLength={40}
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-950 transition outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                placeholder="例如：客户方案评审协作"
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeRenameCollaborationSession}
+                className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmRenameCollaborationSession}
+                disabled={!collaborationRenameValue.trim()}
+                className="h-10 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!collaborationDeleteSession}
+        onOpenChange={(open) => {
+          if (!open) closeDeleteCollaborationSession();
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>删除协作会话</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5 py-2">
+            <p className="text-sm leading-6 text-slate-600">
+              确认删除
+              <span className="font-semibold text-slate-950">
+                「{collaborationDeleteSession?.title || '协作会话'}」
+              </span>
+              ？删除后会移除这个本地协作草稿；已启动生成的任务记录不会被删除。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDeleteCollaborationSession}
+                className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteCollaborationSession}
+                className="h-10 rounded-xl bg-red-600 px-4 text-sm font-semibold text-white transition hover:bg-red-500"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <MockDetailDialog
         detail={mockDetail}
         onOpenChange={(open) => {
@@ -1445,21 +1869,33 @@ function HomeContent() {
 }
 
 function CollaborationStartPanel({
+  sessions,
+  activeSessionId,
   activeAssistants,
   activePeers,
   availablePeers,
   assistantIds,
   peerIds,
+  onSelectSession,
+  onCreateSession,
+  onRenameSession,
+  onDeleteSession,
   onToggleAssistant,
   onTogglePeer,
   onPromptClick,
   children,
 }: {
+  sessions: CollaborationDraftSession[];
+  activeSessionId: string | null;
   activeAssistants: CollaborationAssistant[];
   activePeers: CollaborationPeer[];
   availablePeers: CollaborationPeer[];
   assistantIds: CollaborationAssistant['id'][];
   peerIds: CollaborationPeer['id'][];
+  onSelectSession: (sessionId: string) => void;
+  onCreateSession: () => void;
+  onRenameSession: (session: CollaborationDraftSession) => void;
+  onDeleteSession: (session: CollaborationDraftSession) => void;
   onToggleAssistant: (assistantId: CollaborationAssistant['id']) => void;
   onTogglePeer: (peerId: CollaborationPeer['id']) => void;
   onPromptClick: (prompt: string) => void;
@@ -1467,6 +1903,10 @@ function CollaborationStartPanel({
 }) {
   const totalMembers = activePeers.length + activeAssistants.length;
   const hasDiscoveredPeers = availablePeers.length > 0;
+  const activeSession =
+    sessions.find((session) => session.id === activeSessionId) ||
+    sessions[0] ||
+    null;
 
   return (
     <div className="grid min-h-0 w-full flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -1478,10 +1918,10 @@ function CollaborationStartPanel({
             </span>
             <div className="min-w-0">
               <h2 className="text-foreground truncate text-base font-semibold">
-                协作会话
+                {activeSession?.title || '协作会话'}
               </h2>
               <p className="text-muted-foreground mt-0.5 truncate text-xs">
-                局域网发现已接入 · 已拉入 {activePeers.length} 人、
+                {sessions.length} 个会话 · 已拉入 {activePeers.length} 人、
                 {activeAssistants.length} 个智能助手
               </p>
             </div>
@@ -1544,6 +1984,102 @@ function CollaborationStartPanel({
       </section>
 
       <aside className="flex min-h-0 flex-col gap-4">
+        <section className="border-border/70 bg-card rounded-xl border p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-foreground text-sm font-semibold">
+                协作会话
+              </h3>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                {sessions.length} 个上下文
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onCreateSession}
+              aria-label="新建协作会话"
+              className="border-border bg-background text-muted-foreground hover:border-primary/35 hover:bg-primary/5 hover:text-primary flex size-8 cursor-pointer items-center justify-center rounded-lg border transition-colors"
+            >
+              <Plus className="size-4" />
+            </button>
+          </div>
+          <div className="max-h-44 space-y-1.5 overflow-y-auto">
+            {sessions.length === 0 ? (
+              <button
+                type="button"
+                onClick={onCreateSession}
+                className="border-border bg-background text-muted-foreground hover:border-primary/35 hover:bg-primary/5 flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border text-sm font-medium transition-colors"
+              >
+                <Plus className="size-4" />
+                新建协作
+              </button>
+            ) : (
+              sessions.map((session) => {
+                const active = session.id === activeSession?.id;
+
+                return (
+                  <div
+                    key={session.id}
+                    className={cn(
+                      'border-border bg-background group hover:border-primary/35 hover:bg-primary/5 flex min-h-14 w-full items-center gap-1 rounded-lg border p-1 transition-colors',
+                      active && 'border-primary/35 bg-primary/5'
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectSession(session.id)}
+                      aria-current={active ? 'true' : undefined}
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left"
+                    >
+                      <span
+                        className={cn(
+                          'flex size-8 shrink-0 items-center justify-center rounded-lg border',
+                          active
+                            ? 'border-orange-200 bg-orange-50 text-orange-600'
+                            : 'border-slate-200 bg-slate-50 text-slate-500'
+                        )}
+                      >
+                        <Network className="size-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="text-foreground block truncate text-sm font-semibold">
+                          {session.title}
+                        </span>
+                        <span className="text-muted-foreground block truncate text-xs">
+                          {formatCollaborationSessionTime(session.updatedAt)}
+                        </span>
+                      </span>
+                      <span className="text-muted-foreground shrink-0 text-xs font-semibold">
+                        {session.assistantIds.length}
+                      </span>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                      <button
+                        type="button"
+                        onClick={() => onRenameSession(session)}
+                        aria-label={`重命名${session.title}`}
+                        title="重命名"
+                        className="text-muted-foreground hover:bg-background hover:text-primary flex size-7 cursor-pointer items-center justify-center rounded-md transition-colors"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSession(session)}
+                        aria-label={`删除${session.title}`}
+                        title="删除"
+                        className="text-muted-foreground flex size-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-red-50 hover:text-red-500"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
         <section className="border-border/70 bg-card min-h-0 rounded-xl border p-3 shadow-sm">
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
@@ -1688,7 +2224,7 @@ function SalesAssistantFaqPanel({
           </span>
           <div className="min-w-0">
             <h2 className="text-foreground truncate text-sm font-semibold">
-              销售演示常见问题
+              销售助手常见问题
             </h2>
             <p className="text-muted-foreground mt-0.5 text-xs">
               使用 mock 业务数据展示保险销售流程

@@ -3,6 +3,7 @@ import {
   createSession,
   createTask,
   deleteMessagesByTaskId,
+  getMessagesByTaskId,
   getSession,
   getTask,
   updateTask,
@@ -11,6 +12,7 @@ import type {
   CreateMessageInput,
   CreateSessionInput,
   CreateTaskInput,
+  Message,
   Session,
   Task,
   TaskStatus,
@@ -46,6 +48,7 @@ interface ChannelSessionSyncStore {
   createSession(input: CreateSessionInput): Promise<unknown>;
   createTask(input: CreateTaskInput): Promise<unknown>;
   deleteMessagesByTaskId(taskId: string): Promise<unknown>;
+  getMessagesByTaskId(taskId: string): Promise<Pick<Message, 'created_at'>[]>;
   getSession(sessionId: string): Promise<Session | null>;
   getTask(taskId: string): Promise<Task | null>;
   updateTask(
@@ -59,6 +62,7 @@ const localChannelSessionStore: ChannelSessionSyncStore = {
   createSession,
   createTask,
   deleteMessagesByTaskId,
+  getMessagesByTaskId,
   getSession,
   getTask,
   updateTask,
@@ -111,6 +115,40 @@ function mapChannelStatus(
   if (status === 'running') return 'running';
   if (status === 'error') return 'error';
   return 'completed';
+}
+
+function timestampMs(value: string | null | undefined): number {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function latestTimestamp(
+  messages: Array<{ created_at?: string | null }>
+): number {
+  return messages.reduce(
+    (latest, message) => Math.max(latest, timestampMs(message.created_at)),
+    0
+  );
+}
+
+function isStaleChannelSnapshot(
+  existingMessages: Array<{ created_at?: string | null }>,
+  snapshotMessages: CreateMessageInput[]
+): boolean {
+  if (existingMessages.length === 0 || snapshotMessages.length === 0) {
+    return false;
+  }
+
+  const existingLatest = latestTimestamp(existingMessages);
+  const snapshotLatest = latestTimestamp(snapshotMessages);
+
+  if (snapshotLatest === 0) return false;
+  if (existingLatest > snapshotLatest) return true;
+
+  return (
+    existingLatest === snapshotLatest &&
+    existingMessages.length > snapshotMessages.length
+  );
 }
 
 export function buildLocalChannelSessionIds(input: {
@@ -188,7 +226,16 @@ async function syncChannelSessionsToStore(
     const existingTask = await store.getTask(snapshot.ids.taskId);
     if (!existingTask) {
       await store.createTask(snapshot.taskInput);
-    } else if (existingTask.prompt !== snapshot.taskInput.prompt) {
+    }
+
+    const existingMessages = existingTask
+      ? await store.getMessagesByTaskId(snapshot.ids.taskId)
+      : [];
+    if (isStaleChannelSnapshot(existingMessages, snapshot.messages)) {
+      continue;
+    }
+
+    if (existingTask && existingTask.prompt !== snapshot.taskInput.prompt) {
       await store.updateTask(snapshot.ids.taskId, {
         prompt: snapshot.taskInput.prompt,
       });

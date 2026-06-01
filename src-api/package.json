@@ -25,6 +25,7 @@
     "@modelcontextprotocol/sdk": "^1.25.2",
     "color-diff-napi": "file:stubs/color-diff-napi",
     "hono": "^4.7.10",
+    "jszip": "^3.10.1",
     "nanoid": "^5.1.6",
     "qrcode": "^1.5.4",
     "react-router-dom": "^7.12.0",
