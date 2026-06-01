@@ -5,6 +5,8 @@
  * It uses the agents abstraction layer to support multiple providers.
  */
 
+import { nanoid } from 'nanoid';
+
 import {
   createAgent,
   type AgentConfig,
@@ -18,11 +20,14 @@ import {
   type SkillsConfig,
   type TaskPlan,
 } from '@/core/agent';
-
-import { getProviderManager } from '@/shared/provider/manager';
 import { DEFAULT_AGENT_PROVIDER } from '@/config/constants';
-import { nanoid } from 'nanoid';
-
+import {
+  buildMemoryAugmentedPrompt,
+  rememberFromConversation,
+  updateShortTermFromConversation,
+} from '@/shared/memory/service';
+import type { MemoryConfig, MemorySource } from '@/shared/memory/types';
+import { getProviderManager } from '@/shared/provider/manager';
 // ============================================================================
 // Logging - uses shared logger (writes to ~/.uniins-claw/logs/uniins-claw.log)
 // ============================================================================
@@ -40,6 +45,75 @@ const activeSessions = new Map<string, { abortController: AbortController }>();
 // Global plan store (shared across all agent instances)
 const globalPlanStore = new Map<string, TaskPlan>();
 
+export interface AgentMemoryRuntimeOptions {
+  memoryConfig?: MemoryConfig;
+  clientSessionId?: string;
+  taskId?: string;
+  projectPath?: string;
+  channelId?: string;
+  scheduledTaskId?: string;
+  origin?: MemorySource['origin'];
+}
+
+function collectAssistantText(message: AgentMessage): string {
+  if (message.type === 'text' || message.type === 'direct_answer') {
+    return message.content || '';
+  }
+  if (message.type === 'result') {
+    return message.result || message.content || '';
+  }
+  if (message.type === 'error') {
+    return message.message || '';
+  }
+  return '';
+}
+
+async function preparePromptWithMemory(
+  prompt: string,
+  fallbackSessionId: string,
+  memoryOptions?: AgentMemoryRuntimeOptions
+): Promise<string> {
+  const sessionId = memoryOptions?.clientSessionId || fallbackSessionId;
+  const { prompt: augmentedPrompt } = await buildMemoryAugmentedPrompt({
+    prompt,
+    sessionId,
+    taskId: memoryOptions?.taskId,
+    projectPath: memoryOptions?.projectPath,
+    channelId: memoryOptions?.channelId,
+    scheduledTaskId: memoryOptions?.scheduledTaskId,
+    memoryConfig: memoryOptions?.memoryConfig,
+  });
+  return augmentedPrompt;
+}
+
+async function persistMemoryAfterRun(input: {
+  userMessage: string;
+  assistantText: string;
+  fallbackSessionId: string;
+  memoryOptions?: AgentMemoryRuntimeOptions;
+}): Promise<void> {
+  const sessionId =
+    input.memoryOptions?.clientSessionId || input.fallbackSessionId;
+
+  await updateShortTermFromConversation({
+    sessionId,
+    userMessage: input.userMessage,
+    assistantText: input.assistantText,
+    taskId: input.memoryOptions?.taskId,
+    memoryConfig: input.memoryOptions?.memoryConfig,
+  });
+
+  await rememberFromConversation({
+    userMessage: input.userMessage,
+    assistantText: input.assistantText,
+    sessionId,
+    taskId: input.memoryOptions?.taskId,
+    projectPath: input.memoryOptions?.projectPath,
+    origin: input.memoryOptions?.origin || 'agent',
+    memoryConfig: input.memoryOptions?.memoryConfig,
+  });
+}
+
 /**
  * Get or create the global agent instance
  * If modelConfig is provided, creates a new agent with those settings
@@ -56,7 +130,8 @@ export async function getAgent(config?: Partial<AgentConfig>): Promise<IAgent> {
   const providerManager = getProviderManager();
   const currentAgentConfig = providerManager.getConfig().agent;
   const currentProvider = currentAgentConfig?.type || DEFAULT_AGENT_PROVIDER;
-  const syncedConfig = (currentAgentConfig?.config || {}) as Partial<AgentConfig>;
+  const syncedConfig = (currentAgentConfig?.config ||
+    {}) as Partial<AgentConfig>;
   const effectiveConfig = {
     ...syncedConfig,
     ...(config || {}),
@@ -75,7 +150,10 @@ export async function getAgent(config?: Partial<AgentConfig>): Promise<IAgent> {
       baseUrl: effectiveConfig.baseUrl,
       model: effectiveConfig.model,
     });
-    return createAgent({ provider: currentProvider as any, ...effectiveConfig });
+    return createAgent({
+      provider: currentProvider as any,
+      ...effectiveConfig,
+    });
   }
 
   // Use cached global agent for default configuration
@@ -84,11 +162,14 @@ export async function getAgent(config?: Partial<AgentConfig>): Promise<IAgent> {
     ...effectiveConfig,
   });
   if (!globalAgent || globalAgentCacheKey !== nextCacheKey) {
-    console.log('[AgentService] Creating agent with current provider:', currentProvider);
+    console.log(
+      '[AgentService] Creating agent with current provider:',
+      currentProvider
+    );
     globalAgent = createAgent({
       provider: currentProvider as any,
       ...effectiveConfig,
-      workDir: effectiveConfig.workDir || '~/.uniins-claw'
+      workDir: effectiveConfig.workDir || '~/.uniins-claw',
     });
     globalAgentCacheKey = nextCacheKey;
   }
@@ -175,12 +256,23 @@ export function deletePlan(planId: string): boolean {
 export async function* runPlanningPhase(
   prompt: string,
   session: AgentSession,
-  modelConfig?: { apiKey?: string; baseUrl?: string; model?: string; apiType?: 'anthropic-messages' | 'openai-completions' },
-  language?: string
+  modelConfig?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    apiType?: 'anthropic-messages' | 'openai-completions';
+  },
+  language?: string,
+  memoryOptions?: AgentMemoryRuntimeOptions
 ): AsyncGenerator<AgentMessage> {
   const agent = await getAgent(modelConfig as Partial<AgentConfig>);
+  const effectivePrompt = await preparePromptWithMemory(
+    prompt,
+    session.id,
+    memoryOptions
+  );
 
-  for await (const message of agent.plan(prompt, {
+  for await (const message of agent.plan(effectivePrompt, {
     sessionId: session.id,
     abortController: session.abortController,
     language,
@@ -202,13 +294,24 @@ export async function* runExecutionPhase(
   originalPrompt: string,
   workDir?: string,
   taskId?: string,
-  modelConfig?: { apiKey?: string; baseUrl?: string; model?: string; apiType?: 'anthropic-messages' | 'openai-completions' },
+  modelConfig?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    apiType?: 'anthropic-messages' | 'openai-completions';
+  },
   sandboxConfig?: SandboxConfig,
   skillsConfig?: SkillsConfig,
   mcpConfig?: McpConfig,
-  language?: string
+  language?: string,
+  memoryOptions?: AgentMemoryRuntimeOptions
 ): AsyncGenerator<AgentMessage> {
   const agent = await getAgent(modelConfig);
+  const effectivePrompt = await preparePromptWithMemory(
+    originalPrompt,
+    session.id,
+    memoryOptions
+  );
 
   // Get the plan from global store to pass to agent
   // This is necessary because each agent instance has its own plan store
@@ -227,13 +330,17 @@ export async function* runExecutionPhase(
     sandboxProvider: sandboxConfig?.provider,
     apiEndpoint: sandboxConfig?.apiEndpoint,
   });
-  serviceLogger.info('[AgentService] runExecutionPhase skills config:', skillsConfig);
+  serviceLogger.info(
+    '[AgentService] runExecutionPhase skills config:',
+    skillsConfig
+  );
   serviceLogger.info('[AgentService] runExecutionPhase mcp config:', mcpConfig);
 
+  let assistantText = '';
   for await (const message of agent.execute({
     planId,
     plan, // Pass the plan directly so agent doesn't need to look it up
-    originalPrompt,
+    originalPrompt: effectivePrompt,
     sessionId: session.id,
     cwd: workDir,
     taskId,
@@ -243,8 +350,16 @@ export async function* runExecutionPhase(
     mcpConfig,
     language,
   })) {
+    assistantText += collectAssistantText(message);
     yield message;
   }
+
+  await persistMemoryAfterRun({
+    userMessage: originalPrompt,
+    assistantText,
+    fallbackSessionId: session.id,
+    memoryOptions,
+  });
 }
 
 /**
@@ -256,14 +371,25 @@ export async function* runAgent(
   conversation?: ConversationMessage[],
   workDir?: string,
   taskId?: string,
-  modelConfig?: { apiKey?: string; baseUrl?: string; model?: string; apiType?: 'anthropic-messages' | 'openai-completions' },
+  modelConfig?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    apiType?: 'anthropic-messages' | 'openai-completions';
+  },
   sandboxConfig?: SandboxConfig,
   images?: ImageAttachment[],
   skillsConfig?: SkillsConfig,
   mcpConfig?: McpConfig,
-  language?: string
+  language?: string,
+  memoryOptions?: AgentMemoryRuntimeOptions
 ): AsyncGenerator<AgentMessage> {
   const agent = await getAgent(modelConfig);
+  const effectivePrompt = await preparePromptWithMemory(
+    prompt,
+    session.id,
+    memoryOptions
+  );
 
   // Log sandbox config for debugging - write to file for packaged app visibility
   serviceLogger.info('[AgentService] runAgent called with sandbox config:', {
@@ -272,10 +398,17 @@ export async function* runAgent(
     sandboxProvider: sandboxConfig?.provider,
     apiEndpoint: sandboxConfig?.apiEndpoint,
   });
-  serviceLogger.info('[AgentService] runAgent called with skills config:', skillsConfig);
-  serviceLogger.info('[AgentService] runAgent called with mcp config:', mcpConfig);
+  serviceLogger.info(
+    '[AgentService] runAgent called with skills config:',
+    skillsConfig
+  );
+  serviceLogger.info(
+    '[AgentService] runAgent called with mcp config:',
+    mcpConfig
+  );
 
-  for await (const message of agent.run(prompt, {
+  let assistantText = '';
+  for await (const message of agent.run(effectivePrompt, {
     sessionId: session.id,
     conversation,
     cwd: workDir,
@@ -287,8 +420,16 @@ export async function* runAgent(
     mcpConfig,
     language,
   })) {
+    assistantText += collectAssistantText(message);
     yield message;
   }
+
+  await persistMemoryAfterRun({
+    userMessage: prompt,
+    assistantText,
+    fallbackSessionId: session.id,
+    memoryOptions,
+  });
 }
 
 /**

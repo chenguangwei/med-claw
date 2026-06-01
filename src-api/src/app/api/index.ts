@@ -6,3 +6,5 @@ export { providersRoutes } from './providers.js';
 export { filesRoutes } from './files.js';
 export { mcpRoutes } from './mcp.js';
 export { scheduledTasksRoutes } from './scheduled-tasks.js';
+export { channelsRoutes } from './channels.js';
+export { memoryRoutes } from './memory.js';

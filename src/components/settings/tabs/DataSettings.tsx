@@ -3,20 +3,22 @@
  */
 
 import { useState } from 'react';
+import { API_BASE_URL } from '@/config';
 import {
-  deleteMessagesByTaskId,
-  deleteTask,
+  clearTaskData,
   getAllFiles,
   getAllSessions,
   getAllTasks,
   getMessagesByTaskId,
+  replaceDatabaseSnapshot,
 } from '@/shared/db/database';
 import {
   clearAllSettings,
   getSettings,
-  saveSettings,
+  saveSettingsAsync,
   type Settings,
 } from '@/shared/db/settings';
+import type { DatabaseSnapshot } from '@/shared/db/types';
 import { getSessionsDir } from '@/shared/lib/paths';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
@@ -35,18 +37,267 @@ function isTauri(): boolean {
   return '__TAURI_INTERNALS__' in window || '__TAURI__' in window;
 }
 
-interface ExportData {
+interface ExportData extends DatabaseSnapshot {
   version: number;
   exportedAt: string;
-  sessions: unknown[];
-  tasks: unknown[];
-  messages: unknown[];
-  files: unknown[];
   settings?: Settings;
+  memory?: MemorySnapshot;
+}
+
+interface MemorySnapshot {
+  memories: unknown[];
+  shortTerm: unknown[];
 }
 
 type OperationStatus = 'idle' | 'loading' | 'success' | 'error';
 type ClearType = 'tasks' | 'settings' | 'all' | null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function hasString(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === 'string';
+}
+
+function hasNumber(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === 'number' && Number.isFinite(record[key]);
+}
+
+function hasNullableNumber(
+  record: Record<string, unknown>,
+  key: string
+): boolean {
+  return record[key] === null || hasNumber(record, key);
+}
+
+function hasNullableString(
+  record: Record<string, unknown>,
+  key: string
+): boolean {
+  return record[key] === null || hasString(record, key);
+}
+
+function validateRows(
+  name: string,
+  rows: unknown[],
+  isValid: (row: unknown) => boolean
+): void {
+  const invalidIndex = rows.findIndex((row) => !isValid(row));
+  if (invalidIndex !== -1) {
+    throw new Error(`Invalid ${name} row at index ${invalidIndex}`);
+  }
+}
+
+function validateUniqueIds(
+  name: string,
+  rows: Record<string, unknown>[]
+): void {
+  const ids = new Set<string | number>();
+  for (const row of rows) {
+    const id = row.id;
+    if (typeof id !== 'string' && typeof id !== 'number') {
+      throw new Error(`Invalid ${name} row id`);
+    }
+    if (ids.has(id)) {
+      throw new Error(`Duplicate ${name} row id: ${id}`);
+    }
+    ids.add(id);
+  }
+}
+
+function validateReferences(
+  tasks: Record<string, unknown>[],
+  messages: Record<string, unknown>[],
+  files: Record<string, unknown>[],
+  sessions: Record<string, unknown>[]
+): void {
+  const sessionIds = new Set(sessions.map((session) => session.id));
+  const taskIds = new Set(tasks.map((task) => task.id));
+
+  const orphanTask = tasks.find((task) => !sessionIds.has(task.session_id));
+  if (orphanTask) {
+    throw new Error(`Task references missing session: ${orphanTask.id}`);
+  }
+
+  const orphanMessage = messages.find(
+    (message) => !taskIds.has(message.task_id)
+  );
+  if (orphanMessage) {
+    throw new Error(`Message references missing task: ${orphanMessage.id}`);
+  }
+
+  const orphanFile = files.find((file) => !taskIds.has(file.task_id));
+  if (orphanFile) {
+    throw new Error(`File references missing task: ${orphanFile.id}`);
+  }
+}
+
+function parseMemorySnapshot(value: unknown): MemorySnapshot | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('Invalid memory snapshot');
+  }
+  const { memories, shortTerm } = value;
+  if (!Array.isArray(memories) || !Array.isArray(shortTerm)) {
+    throw new Error('Invalid memory snapshot');
+  }
+  return { memories, shortTerm };
+}
+
+function parseExportData(value: unknown): ExportData {
+  if (!isRecord(value)) {
+    throw new Error('Invalid data format');
+  }
+
+  const {
+    version,
+    exportedAt,
+    sessions,
+    tasks,
+    messages,
+    files,
+    settings,
+    memory,
+  } = value;
+
+  if (
+    (version !== 1 && version !== 2) ||
+    typeof exportedAt !== 'string' ||
+    !Array.isArray(sessions) ||
+    !Array.isArray(tasks) ||
+    !Array.isArray(messages) ||
+    !Array.isArray(files)
+  ) {
+    throw new Error('Invalid data format');
+  }
+
+  validateRows(
+    'sessions',
+    sessions,
+    (row) =>
+      isRecord(row) &&
+      hasString(row, 'id') &&
+      hasString(row, 'prompt') &&
+      hasNumber(row, 'task_count') &&
+      hasString(row, 'created_at') &&
+      hasString(row, 'updated_at')
+  );
+  validateRows(
+    'tasks',
+    tasks,
+    (row) =>
+      isRecord(row) &&
+      hasString(row, 'id') &&
+      hasString(row, 'session_id') &&
+      hasNumber(row, 'task_index') &&
+      hasString(row, 'prompt') &&
+      hasString(row, 'status') &&
+      hasNullableNumber(row, 'cost') &&
+      hasNullableNumber(row, 'duration') &&
+      hasString(row, 'created_at') &&
+      hasString(row, 'updated_at')
+  );
+  validateRows(
+    'messages',
+    messages,
+    (row) =>
+      isRecord(row) &&
+      hasNumber(row, 'id') &&
+      hasString(row, 'task_id') &&
+      hasString(row, 'type') &&
+      hasNullableString(row, 'content') &&
+      hasNullableString(row, 'tool_name') &&
+      hasNullableString(row, 'tool_input') &&
+      hasNullableString(row, 'tool_output') &&
+      hasNullableString(row, 'tool_use_id') &&
+      hasNullableString(row, 'subtype') &&
+      hasNullableString(row, 'error_message') &&
+      hasNullableString(row, 'attachments') &&
+      hasString(row, 'created_at')
+  );
+  validateRows(
+    'files',
+    files,
+    (row) =>
+      isRecord(row) &&
+      hasNumber(row, 'id') &&
+      hasString(row, 'task_id') &&
+      hasString(row, 'name') &&
+      hasString(row, 'type') &&
+      hasString(row, 'path') &&
+      hasNullableString(row, 'preview') &&
+      hasNullableString(row, 'thumbnail') &&
+      (typeof row.is_favorite === 'boolean' || hasNumber(row, 'is_favorite')) &&
+      hasString(row, 'created_at')
+  );
+
+  const sessionRows = sessions as Record<string, unknown>[];
+  const taskRows = tasks as Record<string, unknown>[];
+  const messageRows = messages as Record<string, unknown>[];
+  const fileRows = files as Record<string, unknown>[];
+  validateUniqueIds('sessions', sessionRows);
+  validateUniqueIds('tasks', taskRows);
+  validateUniqueIds('messages', messageRows);
+  validateUniqueIds('files', fileRows);
+  validateReferences(taskRows, messageRows, fileRows, sessionRows);
+
+  return {
+    version,
+    exportedAt,
+    sessions: sessions as ExportData['sessions'],
+    tasks: tasks as ExportData['tasks'],
+    messages: messages as ExportData['messages'],
+    files: (files as ExportData['files']).map((file) => ({
+      ...file,
+      is_favorite: Boolean(file.is_favorite),
+    })),
+    settings:
+      isRecord(settings) && !Array.isArray(settings)
+        ? (settings as unknown as Settings)
+        : undefined,
+    memory: parseMemorySnapshot(memory),
+  };
+}
+
+async function fetchMemorySnapshot(): Promise<MemorySnapshot> {
+  const response = await fetch(`${API_BASE_URL}/memory/snapshot`);
+  if (!response.ok) {
+    throw new Error('Failed to export Agent memory');
+  }
+  const data = (await response.json()) as { memory?: MemorySnapshot };
+  return parseMemorySnapshot(data.memory) || { memories: [], shortTerm: [] };
+}
+
+async function importMemorySnapshot(memory?: MemorySnapshot): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/memory/snapshot`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memory: memory || { memories: [], shortTerm: [] } }),
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(data?.error || 'Failed to import Agent memory');
+  }
+}
+
+async function clearMemorySnapshot(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/memory`, { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error('Failed to clear Agent memory');
+  }
+}
+
+async function clearShortTermMemorySnapshot(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/memory/short-term`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to clear session memory');
+  }
+}
 
 export function DataSettings() {
   const { t } = useLanguage();
@@ -68,22 +319,24 @@ export function DataSettings() {
       const tasks = await getAllTasks();
       const files = await getAllFiles();
       const settings = getSettings();
+      const memory = await fetchMemorySnapshot();
 
       // Get messages for each task
-      const allMessages: unknown[] = [];
+      const allMessages: DatabaseSnapshot['messages'] = [];
       for (const task of tasks) {
         const messages = await getMessagesByTaskId(task.id);
         allMessages.push(...messages);
       }
 
       const exportData: ExportData = {
-        version: 1,
+        version: 2,
         exportedAt: new Date().toISOString(),
         sessions,
         tasks,
         messages: allMessages,
         files,
         settings,
+        memory,
       };
 
       const jsonString = JSON.stringify(exportData, null, 2);
@@ -136,21 +389,20 @@ export function DataSettings() {
       }
 
       const content = await readTextFile(filePath as string);
-      const data = JSON.parse(content) as ExportData;
+      const data = parseExportData(JSON.parse(content));
 
-      // Validate data format
-      if (!data.version || !data.tasks) {
-        throw new Error('Invalid data format');
-      }
+      await replaceDatabaseSnapshot({
+        sessions: data.sessions,
+        tasks: data.tasks,
+        messages: data.messages,
+        files: data.files,
+      });
 
       // Import settings if included
       if (data.settings) {
-        saveSettings(data.settings);
+        await saveSettingsAsync(data.settings);
       }
-
-      // Note: Full import would require database insert operations
-      // For now, we just import settings
-      // TODO: Implement full data import with database operations
+      await importMemorySnapshot(data.memory);
 
       setImportStatus('success');
       setTimeout(() => {
@@ -204,22 +456,14 @@ export function DataSettings() {
         // Clear workspace files first
         await clearWorkspaceFiles();
 
-        // Get all tasks and delete them with their messages
-        const tasks = await getAllTasks();
-        for (const task of tasks) {
-          await deleteMessagesByTaskId(task.id);
-          await deleteTask(task.id);
-        }
+        await clearTaskData();
+        await clearShortTermMemorySnapshot();
       } else if (type === 'all') {
         // Clear workspace files first
         await clearWorkspaceFiles();
 
-        // Get all tasks and delete them with their messages
-        const tasks = await getAllTasks();
-        for (const task of tasks) {
-          await deleteMessagesByTaskId(task.id);
-          await deleteTask(task.id);
-        }
+        await clearTaskData();
+        await clearMemorySnapshot();
 
         // Clear settings
         await clearAllSettings();
@@ -250,7 +494,7 @@ export function DataSettings() {
       case 'tasks':
         return (
           t.settings.dataClearTasksConfirm ||
-          'Are you sure you want to delete all tasks and messages? This action cannot be undone.'
+          'Are you sure you want to delete all tasks, messages, and session memory? This action cannot be undone.'
         );
       case 'settings':
         return (
@@ -260,7 +504,7 @@ export function DataSettings() {
       case 'all':
         return (
           t.settings.dataClearAllConfirm ||
-          'Are you sure you want to delete ALL data including tasks, messages, and settings? This action cannot be undone.'
+          'Are you sure you want to delete ALL data including tasks, messages, settings, and Agent memory? This action cannot be undone.'
         );
       default:
         return '';
@@ -314,7 +558,7 @@ export function DataSettings() {
             </h3>
             <p className="text-muted-foreground mt-1 text-sm">
               {t.settings.dataExportDescription ||
-                'Export all tasks, messages, and settings to a JSON file.'}
+                'Export all tasks, messages, settings, and Agent memory to a JSON file.'}
             </p>
           </div>
           <button
@@ -438,7 +682,7 @@ export function DataSettings() {
                   </div>
                   <div className="text-muted-foreground text-sm">
                     {t.settings.dataClearTasksOnlyDescription ||
-                      'Delete all tasks and messages, keep settings'}
+                      'Delete all tasks, messages, and session memory; keep settings'}
                   </div>
                 </div>
               </button>
@@ -474,7 +718,7 @@ export function DataSettings() {
                   </div>
                   <div className="text-muted-foreground text-sm">
                     {t.settings.dataClearAllDescription ||
-                      'Delete all tasks, messages, and settings'}
+                      'Delete all tasks, messages, settings, and Agent memory'}
                   </div>
                 </div>
               </button>

@@ -3,6 +3,7 @@ import type {
   CreateMessageInput,
   CreateSessionInput,
   CreateTaskInput,
+  DatabaseSnapshot,
   LibraryFile,
   Message,
   Session,
@@ -101,9 +102,11 @@ function idbRequest<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 // ============ Tauri SQLite ============
-let sqliteDb: Awaited<
+type SQLiteDatabase = Awaited<
   ReturnType<typeof import('@tauri-apps/plugin-sql').default.load>
-> | null = null;
+>;
+
+let sqliteDb: SQLiteDatabase | null = null;
 
 async function getSQLiteDatabase() {
   if (!isTauriSync()) {
@@ -123,6 +126,211 @@ async function getSQLiteDatabase() {
   return sqliteDb;
 }
 
+async function idbClearStore(storeName: string): Promise<void> {
+  const db = await getIndexedDB();
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  await idbRequest(store.clear());
+}
+
+async function idbPutRecord<T>(storeName: string, record: T): Promise<void> {
+  const db = await getIndexedDB();
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  await idbRequest(store.put(record));
+}
+
+function toSqliteBoolean(value: boolean | number | undefined): number {
+  return value ? 1 : 0;
+}
+
+function normalizeLibraryFile(file: LibraryFile): LibraryFile {
+  return {
+    ...file,
+    is_favorite: Boolean(file.is_favorite),
+  };
+}
+
+async function upsertSqliteSession(
+  database: SQLiteDatabase,
+  session: Session
+): Promise<void> {
+  await database.execute(
+    `INSERT OR REPLACE INTO sessions (id, prompt, task_count, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      session.id,
+      session.prompt,
+      session.task_count,
+      session.created_at,
+      session.updated_at,
+    ]
+  );
+}
+
+async function upsertSqliteTask(
+  database: SQLiteDatabase,
+  task: Task
+): Promise<void> {
+  await database.execute(
+    `INSERT OR REPLACE INTO tasks (id, session_id, task_index, prompt, status, cost, duration, favorite, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      task.id,
+      task.session_id,
+      task.task_index,
+      task.prompt,
+      task.status,
+      task.cost,
+      task.duration,
+      toSqliteBoolean(task.favorite),
+      task.created_at,
+      task.updated_at,
+    ]
+  );
+}
+
+async function upsertSqliteMessage(
+  database: SQLiteDatabase,
+  message: Message
+): Promise<void> {
+  await database.execute(
+    `INSERT OR REPLACE INTO messages (id, task_id, type, content, tool_name, tool_input, tool_output, tool_use_id, subtype, error_message, attachments, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      message.id,
+      message.task_id,
+      message.type,
+      message.content,
+      message.tool_name,
+      message.tool_input,
+      message.tool_output,
+      message.tool_use_id,
+      message.subtype,
+      message.error_message,
+      message.attachments,
+      message.created_at,
+    ]
+  );
+}
+
+async function upsertSqliteFile(
+  database: SQLiteDatabase,
+  file: LibraryFile
+): Promise<void> {
+  await database.execute(
+    `INSERT OR REPLACE INTO files (id, task_id, name, type, path, preview, thumbnail, is_favorite, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      file.id,
+      file.task_id,
+      file.name,
+      file.type,
+      file.path,
+      file.preview,
+      file.thumbnail,
+      toSqliteBoolean(file.is_favorite),
+      file.created_at,
+    ]
+  );
+}
+
+async function deleteSqliteRowsNotIn(
+  database: SQLiteDatabase,
+  table: 'sessions' | 'tasks' | 'messages' | 'files',
+  column: 'id',
+  values: Array<string | number>
+): Promise<void> {
+  if (values.length === 0) {
+    await database.execute(`DELETE FROM ${table}`);
+    return;
+  }
+
+  const placeholders = values.map((_, index) => `$${index + 1}`).join(', ');
+  await database.execute(
+    `DELETE FROM ${table} WHERE ${column} NOT IN (${placeholders})`,
+    values
+  );
+}
+
+export async function clearTaskData(): Promise<void> {
+  const database = await getSQLiteDatabase();
+
+  if (database) {
+    await database.execute('DELETE FROM files');
+    await database.execute('DELETE FROM messages');
+    await database.execute('DELETE FROM tasks');
+    await database.execute('DELETE FROM sessions');
+    return;
+  }
+
+  await idbClearStore('files');
+  await idbClearStore('messages');
+  await idbClearStore('tasks');
+  await idbClearStore('sessions');
+}
+
+export async function replaceDatabaseSnapshot(
+  snapshot: DatabaseSnapshot
+): Promise<void> {
+  const database = await getSQLiteDatabase();
+
+  if (database) {
+    for (const session of snapshot.sessions) {
+      await upsertSqliteSession(database, session);
+    }
+    for (const task of snapshot.tasks) {
+      await upsertSqliteTask(database, task);
+    }
+    for (const message of snapshot.messages) {
+      await upsertSqliteMessage(database, message);
+    }
+    for (const file of snapshot.files) {
+      await upsertSqliteFile(database, file);
+    }
+
+    await deleteSqliteRowsNotIn(
+      database,
+      'files',
+      'id',
+      snapshot.files.map((file) => file.id)
+    );
+    await deleteSqliteRowsNotIn(
+      database,
+      'messages',
+      'id',
+      snapshot.messages.map((message) => message.id)
+    );
+    await deleteSqliteRowsNotIn(
+      database,
+      'tasks',
+      'id',
+      snapshot.tasks.map((task) => task.id)
+    );
+    await deleteSqliteRowsNotIn(
+      database,
+      'sessions',
+      'id',
+      snapshot.sessions.map((session) => session.id)
+    );
+    return;
+  }
+
+  await clearTaskData();
+  for (const session of snapshot.sessions) {
+    await idbPutRecord('sessions', session);
+  }
+  for (const task of snapshot.tasks) {
+    await idbPutRecord('tasks', task);
+  }
+  for (const message of snapshot.messages) {
+    await idbPutRecord('messages', message);
+  }
+  for (const file of snapshot.files) {
+    await idbPutRecord('files', file);
+  }
+}
+
 // ============ Session Operations ============
 export async function createSession(
   input: CreateSessionInput
@@ -139,28 +347,11 @@ export async function createSession(
   const database = await getSQLiteDatabase();
 
   if (database) {
-    // SQLite (Tauri) - sessions table may not exist in older DBs
-    try {
-      await database.execute(
-        'INSERT INTO sessions (id, prompt, task_count) VALUES ($1, $2, $3)',
-        [input.id, input.prompt, 0]
-      );
-    } catch {
-      // If sessions table doesn't exist, create it first
-      await database.execute(`
-        CREATE TABLE IF NOT EXISTS sessions (
-          id TEXT PRIMARY KEY NOT NULL,
-          prompt TEXT NOT NULL,
-          task_count INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-      `);
-      await database.execute(
-        'INSERT INTO sessions (id, prompt, task_count) VALUES ($1, $2, $3)',
-        [input.id, input.prompt, 0]
-      );
-    }
+    await database.execute(
+      `INSERT INTO sessions (id, prompt, task_count, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [input.id, input.prompt, 0, now, now]
+    );
     return session;
   } else {
     // IndexedDB (Browser)
@@ -294,6 +485,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     status: 'running',
     cost: null,
     duration: null,
+    favorite: false,
     created_at: now,
     updated_at: now,
   };
@@ -301,19 +493,22 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   const database = await getSQLiteDatabase();
 
   if (database) {
-    // SQLite (Tauri) - Try with new schema, fallback to old
-    try {
-      await database.execute(
-        'INSERT INTO tasks (id, session_id, task_index, prompt) VALUES ($1, $2, $3, $4)',
-        [input.id, input.session_id, input.task_index, input.prompt]
-      );
-    } catch {
-      // Fallback for older schema without session_id
-      await database.execute('INSERT INTO tasks (id, prompt) VALUES ($1, $2)', [
-        input.id,
-        input.prompt,
-      ]);
-    }
+    await database.execute(
+      `INSERT INTO tasks (id, session_id, task_index, prompt, status, cost, duration, favorite, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        task.id,
+        task.session_id,
+        task.task_index,
+        task.prompt,
+        task.status,
+        task.cost,
+        task.duration,
+        toSqliteBoolean(task.favorite),
+        task.created_at,
+        task.updated_at,
+      ]
+    );
     const result = await getTask(input.id);
     if (!result) throw new Error('Failed to create task');
 
@@ -419,28 +614,10 @@ export async function updateTask(
     if (updates.length > 0) {
       updates.push(`updated_at = datetime('now')`);
       values.push(id);
-      try {
-        await database.execute(
-          `UPDATE tasks SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
-          values
-        );
-      } catch (error) {
-        // If favorite column doesn't exist, add it and retry
-        if (
-          input.favorite !== undefined &&
-          String(error).includes('favorite')
-        ) {
-          await database.execute(
-            'ALTER TABLE tasks ADD COLUMN favorite INTEGER DEFAULT 0'
-          );
-          await database.execute(
-            `UPDATE tasks SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
-            values
-          );
-        } else {
-          throw error;
-        }
-      }
+      await database.execute(
+        `UPDATE tasks SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
+        values
+      );
     }
 
     return getTask(id);
@@ -466,17 +643,23 @@ export async function deleteTask(id: string): Promise<boolean> {
   const database = await getSQLiteDatabase();
 
   if (database) {
+    await database.execute('DELETE FROM files WHERE task_id = $1', [id]);
+    await database.execute('DELETE FROM messages WHERE task_id = $1', [id]);
     const result = await database.execute('DELETE FROM tasks WHERE id = $1', [
       id,
     ]);
     return result.rowsAffected > 0;
   } else {
+    const files = await getFilesByTaskId(id);
+    for (const file of files) {
+      await deleteFile(file.id);
+    }
+    await deleteMessagesByTaskId(id);
+
     const db = await getIndexedDB();
     const tx = db.transaction('tasks', 'readwrite');
     const store = tx.objectStore('tasks');
     await idbRequest(store.delete(id));
-    // Also delete related messages
-    await deleteMessagesByTaskId(id);
     return true;
   }
 }
@@ -485,67 +668,33 @@ export async function deleteTask(id: string): Promise<boolean> {
 export async function createMessage(
   input: CreateMessageInput
 ): Promise<Message> {
-  const now = new Date().toISOString();
+  const now = input.created_at || new Date().toISOString();
   const database = await getSQLiteDatabase();
 
   if (database) {
-    // Try with attachments column first, fallback to without
-    try {
-      const result = await database.execute(
-        `INSERT INTO messages (task_id, type, content, tool_name, tool_input, tool_output, tool_use_id, subtype, error_message, attachments)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          input.task_id,
-          input.type,
-          input.content || null,
-          input.tool_name || null,
-          input.tool_input || null,
-          input.tool_output || null,
-          input.tool_use_id || null,
-          input.subtype || null,
-          input.error_message || null,
-          input.attachments || null,
-        ]
-      );
+    const result = await database.execute(
+      `INSERT INTO messages (task_id, type, content, tool_name, tool_input, tool_output, tool_use_id, subtype, error_message, attachments, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        input.task_id,
+        input.type,
+        input.content || null,
+        input.tool_name || null,
+        input.tool_input || null,
+        input.tool_output || null,
+        input.tool_use_id || null,
+        input.subtype || null,
+        input.error_message || null,
+        input.attachments || null,
+        now,
+      ]
+    );
 
-      const messages = await database.select<Message[]>(
-        'SELECT * FROM messages WHERE id = $1',
-        [result.lastInsertId]
-      );
-      return messages[0];
-    } catch {
-      // Fallback: add attachments column if it doesn't exist
-      try {
-        await database.execute(
-          'ALTER TABLE messages ADD COLUMN attachments TEXT'
-        );
-      } catch {
-        // Column may already exist
-      }
-
-      const result = await database.execute(
-        `INSERT INTO messages (task_id, type, content, tool_name, tool_input, tool_output, tool_use_id, subtype, error_message, attachments)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          input.task_id,
-          input.type,
-          input.content || null,
-          input.tool_name || null,
-          input.tool_input || null,
-          input.tool_output || null,
-          input.tool_use_id || null,
-          input.subtype || null,
-          input.error_message || null,
-          input.attachments || null,
-        ]
-      );
-
-      const messages = await database.select<Message[]>(
-        'SELECT * FROM messages WHERE id = $1',
-        [result.lastInsertId]
-      );
-      return messages[0];
-    }
+    const messages = await database.select<Message[]>(
+      'SELECT * FROM messages WHERE id = $1',
+      [result.lastInsertId]
+    );
+    return messages[0];
   } else {
     const db = await getIndexedDB();
     const message: Omit<Message, 'id'> & { id?: number } = {
@@ -654,8 +803,8 @@ export async function createFile(input: CreateFileInput): Promise<LibraryFile> {
 
   if (database) {
     const result = await database.execute(
-      `INSERT INTO files (task_id, name, type, path, preview, thumbnail)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO files (task_id, name, type, path, preview, thumbnail, is_favorite, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         input.task_id,
         input.name,
@@ -663,6 +812,8 @@ export async function createFile(input: CreateFileInput): Promise<LibraryFile> {
         input.path,
         input.preview || null,
         input.thumbnail || null,
+        0,
+        now,
       ]
     );
 
@@ -670,7 +821,7 @@ export async function createFile(input: CreateFileInput): Promise<LibraryFile> {
       'SELECT * FROM files WHERE id = $1',
       [result.lastInsertId]
     );
-    return files[0];
+    return normalizeLibraryFile(files[0]);
   } else {
     const db = await getIndexedDB();
     const file: Omit<LibraryFile, 'id'> & { id?: number } = {
@@ -695,10 +846,11 @@ export async function getFilesByTaskId(taskId: string): Promise<LibraryFile[]> {
   const database = await getSQLiteDatabase();
 
   if (database) {
-    return database.select<LibraryFile[]>(
+    const files = await database.select<LibraryFile[]>(
       'SELECT * FROM files WHERE task_id = $1 ORDER BY created_at ASC',
       [taskId]
     );
+    return files.map(normalizeLibraryFile);
   } else {
     const db = await getIndexedDB();
     const tx = db.transaction('files', 'readonly');
@@ -716,9 +868,10 @@ export async function getAllFiles(): Promise<LibraryFile[]> {
   const database = await getSQLiteDatabase();
 
   if (database) {
-    return database.select<LibraryFile[]>(
+    const files = await database.select<LibraryFile[]>(
       'SELECT * FROM files ORDER BY created_at DESC'
     );
+    return files.map(normalizeLibraryFile);
   } else {
     const db = await getIndexedDB();
     const tx = db.transaction('files', 'readonly');
@@ -745,7 +898,7 @@ export async function toggleFileFavorite(
       'SELECT * FROM files WHERE id = $1',
       [fileId]
     );
-    return files[0] || null;
+    return files[0] ? normalizeLibraryFile(files[0]) : null;
   } else {
     const db = await getIndexedDB();
     const tx = db.transaction('files', 'readwrite');

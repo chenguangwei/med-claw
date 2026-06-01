@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 
 import type { SandboxConfig } from '@/core/agent/types';
+import type { AgentMemoryRuntimeOptions } from '@/shared/services/agent';
 import {
   createSession,
   deleteSession,
@@ -15,6 +16,31 @@ import type { AgentRequest } from '@/shared/types/agent';
 
 const agent = new Hono();
 const SSE_KEEPALIVE_INTERVAL_MS = 10_000;
+
+function memoryOptionsFromRequest(
+  body: Pick<
+    AgentRequest,
+    | 'clientSessionId'
+    | 'sessionId'
+    | 'taskId'
+    | 'workDir'
+    | 'projectPath'
+    | 'channelId'
+    | 'scheduledTaskId'
+    | 'memoryConfig'
+  >,
+  origin: AgentMemoryRuntimeOptions['origin']
+): AgentMemoryRuntimeOptions {
+  return {
+    memoryConfig: body.memoryConfig,
+    clientSessionId: body.clientSessionId || body.sessionId,
+    taskId: body.taskId,
+    projectPath: body.projectPath || body.workDir,
+    channelId: body.channelId,
+    scheduledTaskId: body.scheduledTaskId,
+    origin,
+  };
+}
 
 // Helper to create SSE stream
 function createSSEStream(generator: AsyncGenerator<unknown>) {
@@ -79,7 +105,8 @@ agent.post('/chat', async (c) => {
       body.modelConfig,
       body.language,
       body.conversation,
-      abortController
+      abortController,
+      memoryOptionsFromRequest(body, 'chat')
     )
   );
 
@@ -108,7 +135,13 @@ agent.post('/plan', async (c) => {
 
   const session = createSession('plan');
   const readable = createSSEStream(
-    runPlanningPhase(body.prompt, session, body.modelConfig, body.language)
+    runPlanningPhase(
+      body.prompt,
+      session,
+      body.modelConfig,
+      body.language,
+      memoryOptionsFromRequest(body, 'agent')
+    )
   );
 
   return new Response(readable, { headers: SSE_HEADERS });
@@ -138,6 +171,11 @@ agent.post('/execute', async (c) => {
       includeServers?: string[];
     };
     language?: string;
+    clientSessionId?: string;
+    memoryConfig?: AgentRequest['memoryConfig'];
+    projectPath?: string;
+    channelId?: string;
+    scheduledTaskId?: string;
   }>();
 
   console.log('[AgentAPI] POST /execute received:', {
@@ -174,7 +212,8 @@ agent.post('/execute', async (c) => {
       body.sandboxConfig,
       body.skillsConfig,
       body.mcpConfig,
-      body.language
+      body.language,
+      memoryOptionsFromRequest(body, 'agent')
     )
   );
 
@@ -235,7 +274,8 @@ agent.post('/', async (c) => {
       body.images,
       body.skillsConfig,
       body.mcpConfig,
-      body.language
+      body.language,
+      memoryOptionsFromRequest(body, 'agent')
     )
   );
 

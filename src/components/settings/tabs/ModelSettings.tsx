@@ -591,6 +591,143 @@ export function ModelSettings({
                   />
                 </div>
               </div>
+
+              <div className="space-y-4">
+                <h4 className="text-foreground text-sm font-medium">
+                  {t.settings.agentMemory}
+                </h4>
+
+                <label className="flex max-w-md items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={settings.memoryEnabled}
+                    onChange={(e) =>
+                      onSettingsChange({
+                        ...settings,
+                        memoryEnabled: e.target.checked,
+                      })
+                    }
+                    className="border-input mt-1 h-4 w-4 rounded"
+                  />
+                  <span className="space-y-1">
+                    <span className="text-foreground block text-sm font-medium">
+                      {t.settings.memoryEnabled}
+                    </span>
+                    <span className="text-muted-foreground block text-xs">
+                      {t.settings.memoryEnabledDescription}
+                    </span>
+                  </span>
+                </label>
+
+                <label className="flex max-w-md items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={settings.longTermMemoryEnabled}
+                    disabled={!settings.memoryEnabled}
+                    onChange={(e) =>
+                      onSettingsChange({
+                        ...settings,
+                        longTermMemoryEnabled: e.target.checked,
+                      })
+                    }
+                    className="border-input mt-1 h-4 w-4 rounded"
+                  />
+                  <span className="space-y-1">
+                    <span className="text-foreground block text-sm font-medium">
+                      {t.settings.longTermMemoryEnabled}
+                    </span>
+                    <span className="text-muted-foreground block text-xs">
+                      {t.settings.longTermMemoryEnabledDescription}
+                    </span>
+                  </span>
+                </label>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-foreground block text-sm font-medium">
+                    {t.settings.memoryAutoSaveMode}
+                  </label>
+                  <select
+                    value={
+                      settings.memoryAutoSaveMode === 'off' ||
+                      settings.memoryAutoSaveMode === 'suggest'
+                        ? settings.memoryAutoSaveMode
+                        : 'explicit'
+                    }
+                    disabled={
+                      !settings.memoryEnabled || !settings.longTermMemoryEnabled
+                    }
+                    onChange={(e) =>
+                      onSettingsChange({
+                        ...settings,
+                        memoryAutoSaveMode: e.target
+                          .value as typeof settings.memoryAutoSaveMode,
+                      })
+                    }
+                    className="border-input bg-background text-foreground focus:ring-ring h-10 w-full max-w-md rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
+                  >
+                    <option value="off">{t.settings.memoryAutoSaveOff}</option>
+                    <option value="explicit">
+                      {t.settings.memoryAutoSaveExplicit}
+                    </option>
+                    <option value="suggest">
+                      {t.settings.memoryAutoSaveSuggest}
+                    </option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-foreground block text-sm font-medium">
+                    {t.settings.maxMemoryContextTokens}
+                  </label>
+                  <p className="text-muted-foreground text-xs">
+                    {t.settings.maxMemoryContextTokensDescription}
+                  </p>
+                  <input
+                    type="number"
+                    min="0"
+                    max="4000"
+                    step="100"
+                    value={settings.maxMemoryContextTokens}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 0;
+                      onSettingsChange({
+                        ...settings,
+                        maxMemoryContextTokens: Math.max(
+                          0,
+                          Math.min(4000, value)
+                        ),
+                      });
+                    }}
+                    className="border-input bg-background text-foreground focus:ring-ring h-10 w-full max-w-md rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-foreground block text-sm font-medium">
+                    {t.settings.maxLongTermMemoryItems}
+                  </label>
+                  <p className="text-muted-foreground text-xs">
+                    {t.settings.maxLongTermMemoryItemsDescription}
+                  </p>
+                  <input
+                    type="number"
+                    min="0"
+                    max="20"
+                    value={settings.maxLongTermMemoryItems}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 0;
+                      onSettingsChange({
+                        ...settings,
+                        maxLongTermMemoryItems: Math.max(
+                          0,
+                          Math.min(20, value)
+                        ),
+                      });
+                    }}
+                    className="border-input bg-background text-foreground focus:ring-ring h-10 w-full max-w-md rounded-lg border px-3 text-sm focus:ring-2 focus:outline-none"
+                  />
+                </div>
+              </div>
             </div>
           )}
         </div>

@@ -17,6 +17,7 @@ test('getAgent uses synced provider manager config when request config is omitte
       apiKey: 'test-api-key',
       baseUrl: 'https://example.test/v1',
       model: 'test-model',
+      apiType: 'openai-completions',
     });
 
     const agent = await getAgent();
@@ -26,6 +27,7 @@ test('getAgent uses synced provider manager config when request config is omitte
     assert.equal(config.apiKey, 'test-api-key');
     assert.equal(config.baseUrl, 'https://example.test/v1');
     assert.equal(config.model, 'test-model');
+    assert.equal(config.apiType, 'openai-completions');
   } finally {
     await shutdownProviderManager();
   }

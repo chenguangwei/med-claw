@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { API_BASE_URL } from '@/config';
 import {
   deleteTask,
   getAllTasks,
@@ -23,6 +24,10 @@ import {
   type MessageAttachment,
 } from '@/shared/hooks/useAgent';
 import { useVitePreview } from '@/shared/hooks/useVitePreview';
+import {
+  syncChannelSessionsToLocalDb,
+  type ChannelSessionSnapshot,
+} from '@/shared/lib/channel-session-sync';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
 import {
@@ -631,6 +636,20 @@ function TaskDetailContent() {
   useEffect(() => {
     async function loadAllTasks() {
       try {
+        try {
+          const response = await fetch(`${API_BASE_URL}/channels`);
+          if (response.ok) {
+            const channelStatus = (await response.json()) as {
+              sessions?: ChannelSessionSnapshot[];
+            };
+            if (Array.isArray(channelStatus.sessions)) {
+              await syncChannelSessionsToLocalDb(channelStatus.sessions);
+            }
+          }
+        } catch (syncError) {
+          console.warn('Failed to sync channel sessions:', syncError);
+        }
+
         const dbTasks = await getAllTasks();
         setAllTasks((prev) => {
           // Preserve current task if it exists in prev but not in database yet

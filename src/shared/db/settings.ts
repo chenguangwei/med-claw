@@ -82,6 +82,7 @@ export const defaultSandboxProviders: SandboxProviderSetting[] = [
 // ============================================================================
 
 export type AgentRuntimeType = 'codeany' | 'custom';
+export type MemoryAutoSaveMode = 'off' | 'explicit' | 'suggest';
 
 export interface AgentRuntimeSetting {
   id: string;
@@ -92,6 +93,7 @@ export interface AgentRuntimeSetting {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    apiType?: ApiType;
     executablePath?: string;
     [key: string]: unknown;
   };
@@ -223,6 +225,13 @@ export interface Settings {
   // Conversation History settings
   maxConversationTurns: number; // Maximum conversation turns to keep in history (default: 20)
   maxHistoryTokens: number; // Maximum tokens for conversation history (default: 2000)
+
+  // Agent Memory settings
+  memoryEnabled: boolean; // Enable short-term and long-term memory context
+  longTermMemoryEnabled: boolean; // Enable durable cross-session memory
+  memoryAutoSaveMode: MemoryAutoSaveMode; // How long-term memory is saved
+  maxMemoryContextTokens: number; // Token budget for memory context injection
+  maxLongTermMemoryItems: number; // Max long-term memory items injected per request
 
   // General settings
   theme: 'light' | 'dark' | 'system';
@@ -463,6 +472,11 @@ export const defaultSettings: Settings = {
   defaultAgentRuntime: 'codeany', // Default to CodeAny Agent
   maxConversationTurns: 20, // Default: 20 conversation turns
   maxHistoryTokens: 2000, // Default: 2000 tokens for history
+  memoryEnabled: true,
+  longTermMemoryEnabled: true,
+  memoryAutoSaveMode: 'explicit',
+  maxMemoryContextTokens: 900,
+  maxLongTermMemoryItems: 6,
   theme: 'system',
   accentColor: 'orange',
   backgroundStyle: 'default',
@@ -507,6 +521,40 @@ async function getDatabase() {
   return db;
 }
 
+function mergeDefaultProviders(settings: Settings): Settings {
+  const providers = Array.isArray(settings.providers)
+    ? [...settings.providers]
+    : [...defaultProviders];
+  for (const defaultProvider of defaultProviders) {
+    if (!providers.find((p) => p.id === defaultProvider.id)) {
+      providers.push(defaultProvider);
+    }
+  }
+  return { ...settings, providers };
+}
+
+function readSettingsCache(): Settings | null {
+  try {
+    const stored = localStorage.getItem('uniins-claw_settings');
+    if (!stored) return null;
+    return mergeDefaultProviders({
+      ...defaultSettings,
+      ...JSON.parse(stored),
+    });
+  } catch (error) {
+    console.error('[Settings] Failed to load from localStorage:', error);
+    return null;
+  }
+}
+
+function writeSettingsCache(settings: Settings): void {
+  try {
+    localStorage.setItem('uniins-claw_settings', JSON.stringify(settings));
+  } catch (error) {
+    console.error('[Settings] Failed to save to localStorage:', error);
+  }
+}
+
 // Get settings from database (async version)
 export async function getSettingsAsync(): Promise<Settings> {
   // Return cached settings if available
@@ -537,7 +585,7 @@ export async function getSettingsAsync(): Promise<Settings> {
 
       if (result.length > 0) {
         // Build settings object from key-value pairs
-        const settings = { ...defaultSettings };
+        let settings = { ...defaultSettings };
         for (const row of result) {
           try {
             const value = JSON.parse(row.value);
@@ -546,12 +594,7 @@ export async function getSettingsAsync(): Promise<Settings> {
             // Skip invalid JSON values
           }
         }
-        // Migration: Add missing default providers
-        for (const defaultProvider of defaultProviders) {
-          if (!settings.providers.find((p) => p.id === defaultProvider.id)) {
-            settings.providers.push(defaultProvider);
-          }
-        }
+        settings = mergeDefaultProviders(settings);
         // Debug: Log loaded settings
         console.log('[Settings] Loaded from database:', {
           defaultProvider: settings.defaultProvider,
@@ -571,36 +614,22 @@ export async function getSettingsAsync(): Promise<Settings> {
     }
   }
 
-  // Fallback to localStorage for browser mode
-  try {
-    const stored = localStorage.getItem('uniins-claw_settings');
-    if (stored) {
-      const loadedSettings = { ...defaultSettings, ...JSON.parse(stored) };
-      // Migration: Add missing default providers
-      for (const defaultProvider of defaultProviders) {
-        if (
-          !loadedSettings.providers.find(
-            (p: AIProvider) => p.id === defaultProvider.id
-          )
-        ) {
-          loadedSettings.providers.push(defaultProvider);
-        }
-      }
-      // Debug: Log loaded settings
-      console.log('[Settings] Loaded from localStorage:', {
-        defaultProvider: loadedSettings.defaultProvider,
-        defaultModel: loadedSettings.defaultModel,
-        sandboxEnabled: loadedSettings.sandboxEnabled,
-        sandboxProvider: loadedSettings.defaultSandboxProvider,
-      });
-      settingsCache = loadedSettings;
-      return loadedSettings;
-    } else {
-      console.log('[Settings] localStorage has no uniins-claw_settings');
+  // Fallback to localStorage cache for browser mode or first-run migration.
+  const cachedSettings = readSettingsCache();
+  if (cachedSettings) {
+    console.log('[Settings] Loaded from localStorage cache:', {
+      defaultProvider: cachedSettings.defaultProvider,
+      defaultModel: cachedSettings.defaultModel,
+      sandboxEnabled: cachedSettings.sandboxEnabled,
+      sandboxProvider: cachedSettings.defaultSandboxProvider,
+    });
+    settingsCache = cachedSettings;
+    if (database) {
+      await saveSettingsAsync(cachedSettings);
     }
-  } catch (error) {
-    console.error('[Settings] Failed to load from localStorage:', error);
+    return cachedSettings;
   }
+  console.log('[Settings] localStorage has no uniins-claw_settings');
 
   // WARNING: Using default settings - user custom API settings will NOT be applied
   console.warn(
@@ -617,31 +646,16 @@ export function getSettings(): Settings {
     return settingsCache;
   }
 
-  // Try localStorage first for immediate sync access
-  try {
-    const stored = localStorage.getItem('uniins-claw_settings');
-    if (stored) {
-      const loadedSettings = { ...defaultSettings, ...JSON.parse(stored) };
-      // Migration: Add missing default providers
-      for (const defaultProvider of defaultProviders) {
-        if (
-          !loadedSettings.providers.find(
-            (p: AIProvider) => p.id === defaultProvider.id
-          )
-        ) {
-          loadedSettings.providers.push(defaultProvider);
-        }
-      }
-      settingsCache = loadedSettings;
-      console.log('[Settings] getSettings loaded from localStorage:', {
-        defaultProvider: loadedSettings.defaultProvider,
-        defaultModel: loadedSettings.defaultModel,
-        providersCount: loadedSettings.providers.length,
-      });
-      return loadedSettings;
-    }
-  } catch (error) {
-    console.error('[Settings] Failed to load from localStorage:', error);
+  // Synchronous callers cannot query SQLite; use the cache mirror until init.
+  const cachedSettings = readSettingsCache();
+  if (cachedSettings) {
+    settingsCache = cachedSettings;
+    console.log('[Settings] getSettings loaded from localStorage cache:', {
+      defaultProvider: cachedSettings.defaultProvider,
+      defaultModel: cachedSettings.defaultModel,
+      providersCount: cachedSettings.providers.length,
+    });
+    return cachedSettings;
   }
 
   // WARNING: Returning default settings - user configuration may not be loaded
@@ -690,12 +704,8 @@ export async function saveSettingsAsync(settings: Settings): Promise<void> {
     );
   }
 
-  // Also save to localStorage as fallback
-  try {
-    localStorage.setItem('uniins-claw_settings', JSON.stringify(settings));
-  } catch (error) {
-    console.error('[Settings] Failed to save to localStorage:', error);
-  }
+  // Keep a localStorage mirror for sync startup reads and browser mode.
+  writeSettingsCache(settings);
 }
 
 // Sync version that triggers async save
@@ -708,13 +718,9 @@ export function saveSettings(settings: Settings): void {
     providersCount: settings.providers.length,
   });
 
-  // Save to localStorage immediately for sync access
-  try {
-    localStorage.setItem('uniins-claw_settings', JSON.stringify(settings));
-    console.log('[Settings] Saved to localStorage successfully');
-  } catch (error) {
-    console.error('[Settings] Failed to save to localStorage:', error);
-  }
+  // Save to localStorage immediately for sync startup access.
+  writeSettingsCache(settings);
+  console.log('[Settings] Saved to localStorage cache successfully');
 
   // Also save to database asynchronously
   saveSettingsAsync(settings)
@@ -735,17 +741,21 @@ export async function initializeSettings(): Promise<Settings> {
   ]);
 
   const settings = await getSettingsAsync();
+  let needsSave = false;
 
   // If paths are empty (first run or migration), set them to platform defaults
   if (!settings.workDir) {
     settings.workDir = appDataDir;
+    needsSave = true;
   }
   if (!settings.mcpConfigPath) {
     settings.mcpConfigPath = mcpConfigPath;
+    needsSave = true;
   }
   // Default skillsPath to workDir/skills (not system default)
   if (!settings.skillsPath) {
     settings.skillsPath = `${settings.workDir}/skills`;
+    needsSave = true;
   }
 
   // Migration: If a sandbox provider is selected but sandboxEnabled is not true, enable it
@@ -756,16 +766,12 @@ export async function initializeSettings(): Promise<Settings> {
       settings.defaultSandboxProvider
     );
     settings.sandboxEnabled = true;
+    needsSave = true;
   }
 
   settingsCache = settings;
 
-  // Save if paths were updated
-  if (
-    settings.workDir === appDataDir ||
-    settings.mcpConfigPath === mcpConfigPath ||
-    settings.skillsPath === `${settings.workDir}/skills`
-  ) {
+  if (needsSave) {
     await saveSettingsAsync(settings);
   }
 
@@ -919,6 +925,9 @@ export async function syncSettingsWithBackend(): Promise<void> {
     }
     if (settings.defaultModel) {
       agentConfig.model = settings.defaultModel;
+    }
+    if (aiProvider.apiType) {
+      agentConfig.apiType = aiProvider.apiType;
     }
   }
 

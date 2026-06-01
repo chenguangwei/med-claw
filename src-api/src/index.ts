@@ -5,9 +5,11 @@ import { logger } from 'hono/logger';
 
 import {
   agentRoutes,
+  channelsRoutes,
   filesRoutes,
   healthRoutes,
   mcpRoutes,
+  memoryRoutes,
   previewRoutes,
   providersRoutes,
   sandboxRoutes,
@@ -19,8 +21,11 @@ import {
   initProviderManager,
   shutdownProviderManager,
 } from '@/shared/provider/manager';
+import {
+  startScheduledTaskRunner,
+  stopScheduledTaskRunner,
+} from '@/shared/scheduled/service';
 import { getPreviewManager } from '@/shared/services/preview';
-import { startScheduledTaskRunner, stopScheduledTaskRunner } from '@/shared/scheduled/service';
 
 const app = new Hono();
 
@@ -36,7 +41,9 @@ app.route('/preview', previewRoutes);
 app.route('/providers', providersRoutes);
 app.route('/files', filesRoutes);
 app.route('/mcp', mcpRoutes);
+app.route('/memory', memoryRoutes);
 app.route('/scheduled-tasks', scheduledTasksRoutes);
+app.route('/channels', channelsRoutes);
 
 // Root endpoint
 app.get('/', (c) => {
@@ -51,7 +58,9 @@ app.get('/', (c) => {
       providers: '/providers',
       files: '/files',
       mcp: '/mcp',
+      memory: '/memory',
       scheduledTasks: '/scheduled-tasks',
+      channels: '/channels',
     },
   });
 });

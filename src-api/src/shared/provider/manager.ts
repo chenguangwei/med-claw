@@ -15,6 +15,7 @@ import type {
   ProvidersConfig,
 } from '@/shared/provider/types';
 import { DEFAULT_AGENT_PROVIDER } from '@/config/constants';
+import { getProvidersConfig } from '@/config/loader';
 
 // ============================================================================
 // Provider Manager
@@ -393,6 +394,14 @@ class ProviderManagerImpl {
     } catch (error) {
       console.warn('[ProviderManager] Could not load agent registry:', error);
     }
+
+    const loadedConfig = getProvidersConfig();
+    this.config = {
+      ...loadedConfig,
+      ...this.config,
+      sandbox: this.config.sandbox ?? loadedConfig.sandbox,
+      agent: this.config.agent ?? loadedConfig.agent,
+    };
 
     // Load default configuration from environment if not set
     // Default to codex for isolated execution

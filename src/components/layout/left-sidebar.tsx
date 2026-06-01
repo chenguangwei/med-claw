@@ -72,6 +72,7 @@ import {
   X,
 } from 'lucide-react';
 
+import { ChannelManagement } from '@/components/channels/ChannelManagement';
 import { LogoMark, LogoWordmark } from '@/components/common/logo';
 import { SettingsModal } from '@/components/settings';
 import { API_BASE_URL } from '@/components/settings/constants';
@@ -498,7 +499,8 @@ export function LeftSidebar({
     (panelCategory === 'skills' ||
       panelCategory === 'workplace' ||
       panelCategory === 'data' ||
-      panelCategory === 'mcp');
+      panelCategory === 'mcp' ||
+      panelCategory === 'connector');
 
   const settingsNavItems: Array<{
     category: SettingsCategory;
@@ -509,6 +511,7 @@ export function LeftSidebar({
     { category: 'workplace', icon: FolderOpen, label: t.nav.workspace },
     { category: 'data', icon: Clock, label: t.nav.logManagement },
     { category: 'mcp', icon: Server, label: t.nav.mcpPlaza },
+    { category: 'connector', icon: Smartphone, label: '渠道管理' },
   ];
 
   return (
@@ -825,6 +828,19 @@ function SettingsInlinePanel({
         settings={settings}
         onSettingsChange={onSettingsChange}
       />
+    );
+  }
+
+  if (category === 'connector') {
+    return (
+      <div className="border-sidebar-border bg-background flex h-full min-w-0 flex-1 flex-col overflow-hidden border-l">
+        <div className="border-sidebar-border shrink-0 border-b px-8 py-5">
+          <h2 className="text-foreground text-xl font-semibold">渠道管理</h2>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-8">
+          <ChannelManagement />
+        </div>
+      </div>
     );
   }
 

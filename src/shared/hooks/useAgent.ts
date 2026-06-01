@@ -526,6 +526,40 @@ function getMcpConfig(executionScope?: AgentExecutionScope):
   }
 }
 
+function getMemoryConfig():
+  | {
+      enabled: boolean;
+      longTermEnabled: boolean;
+      autoSaveMode: 'off' | 'explicit' | 'suggest';
+      maxContextTokens: number;
+      maxLongTermItems: number;
+    }
+  | undefined {
+  try {
+    const settings = getSettings();
+    const autoSaveMode =
+      settings.memoryAutoSaveMode === 'off' ||
+      settings.memoryAutoSaveMode === 'suggest'
+        ? settings.memoryAutoSaveMode
+        : 'explicit';
+    return {
+      enabled: settings.memoryEnabled !== false,
+      longTermEnabled: settings.longTermMemoryEnabled !== false,
+      autoSaveMode,
+      maxContextTokens: Math.max(
+        0,
+        Math.min(4000, settings.maxMemoryContextTokens || 900)
+      ),
+      maxLongTermItems: Math.max(
+        0,
+        Math.min(20, settings.maxLongTermMemoryItems || 6)
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export interface PermissionRequest {
   id: string;
   tool: string;
@@ -2119,6 +2153,8 @@ export function useAgent(): UseAgentReturn {
 
       try {
         const modelConfig = getModelConfig();
+        const memoryConfig = getMemoryConfig();
+        const clientSessionId = sessId || currentTaskId;
 
         // Note: We no longer check if model is configured here.
         // The backend will check if Claude Code is available locally.
@@ -2154,6 +2190,10 @@ export function useAgent(): UseAgentReturn {
                 prompt: augmentedPrompt,
                 modelConfig,
                 language,
+                clientSessionId,
+                taskId: currentTaskId,
+                memoryConfig,
+                projectPath: computedSessionFolder || undefined,
               }),
               signal: abortController.signal,
             }
@@ -2325,6 +2365,9 @@ export function useAgent(): UseAgentReturn {
               skillsConfig,
               mcpConfig,
               language,
+              clientSessionId,
+              memoryConfig,
+              projectPath: workDir,
             }),
             signal: abortController.signal,
           });
@@ -2363,6 +2406,10 @@ export function useAgent(): UseAgentReturn {
               prompt: augmentedPrompt,
               modelConfig,
               language: getPreferredLanguage(),
+              clientSessionId,
+              taskId: currentTaskId,
+              memoryConfig,
+              projectPath: computedSessionFolder || undefined,
             }),
             signal: abortController.signal,
           }
@@ -2525,7 +2572,14 @@ export function useAgent(): UseAgentReturn {
 
       return currentTaskId;
     },
-    [isRunning, processStream]
+    [
+      isRunning,
+      processStream,
+      currentSessionId,
+      currentTaskIndex,
+      initialPrompt,
+      taskId,
+    ]
   );
 
   // Phase 2: Execute the approved plan
@@ -2574,6 +2628,7 @@ export function useAgent(): UseAgentReturn {
       const sandboxConfig = getSandboxConfig();
       const skillsConfig = getSkillsConfig(executionScopeRef.current);
       const mcpConfig = getMcpConfig(executionScopeRef.current);
+      const memoryConfig = getMemoryConfig();
       const language = getPreferredLanguage();
       const scopedInitialPrompt = executionScopeRef.current?.instruction
         ? `${executionScopeRef.current.instruction}\n${initialPrompt}`
@@ -2596,6 +2651,9 @@ export function useAgent(): UseAgentReturn {
             skillsConfig,
             mcpConfig,
             language,
+            clientSessionId: currentSessionId || taskId,
+            memoryConfig,
+            projectPath: workDir,
           }),
           signal: abortController.signal,
         }
@@ -2715,7 +2773,15 @@ export function useAgent(): UseAgentReturn {
         }
       }
     }
-  }, [plan, taskId, phase, initialPrompt, processStream, sessionFolder]);
+  }, [
+    plan,
+    taskId,
+    phase,
+    initialPrompt,
+    processStream,
+    sessionFolder,
+    currentSessionId,
+  ]);
 
   // Reject the plan
   const rejectPlan = useCallback(async (): Promise<void> => {
@@ -2814,6 +2880,8 @@ export function useAgent(): UseAgentReturn {
         const sandboxConfig = getSandboxConfig();
         const skillsConfig = getSkillsConfig(currentExecutionScope);
         const mcpConfig = getMcpConfig(currentExecutionScope);
+        const memoryConfig = getMemoryConfig();
+        const clientSessionId = currentSessionId || taskId;
 
         // Prepare images for API (only send image attachments with actual data)
         const images = attachments
@@ -2870,6 +2938,10 @@ export function useAgent(): UseAgentReturn {
                 modelConfig,
                 language,
                 conversation: conversationHistory,
+                clientSessionId,
+                taskId,
+                memoryConfig,
+                projectPath: workDir,
               }),
               signal: abortController.signal,
             }
@@ -2975,6 +3047,9 @@ export function useAgent(): UseAgentReturn {
             skillsConfig,
             mcpConfig,
             language: getPreferredLanguage(),
+            clientSessionId,
+            memoryConfig,
+            projectPath: workDir,
           }),
           signal: abortController.signal,
         });
@@ -3020,7 +3095,15 @@ export function useAgent(): UseAgentReturn {
         }
       }
     },
-    [isRunning, taskId, messages, initialPrompt, processStream, sessionFolder]
+    [
+      isRunning,
+      taskId,
+      messages,
+      initialPrompt,
+      processStream,
+      sessionFolder,
+      currentSessionId,
+    ]
   );
 
   const stopAgent = useCallback(async () => {

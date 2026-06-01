@@ -25,7 +25,9 @@
     "color-diff-napi": "file:stubs/color-diff-napi",
     "hono": "^4.7.10",
     "nanoid": "^5.1.6",
+    "qrcode": "^1.5.4",
     "react-router-dom": "^7.12.0",
+    "weixin-agent-sdk": "^0.5.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
@@ -33,6 +35,7 @@
     "@eslint/js": "^9.39.2",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.0",
     "@types/node": "^22.12.0",
+    "@types/qrcode": "^1.5.6",
     "@typescript-eslint/eslint-plugin": "^8.53.0",
     "@typescript-eslint/parser": "^8.53.0",
     "@yao-pkg/pkg": "^6.0.0",
@@ -47,7 +50,7 @@
   },
   "pkg": {
     "scripts": "dist/**/*.js",
-    "assets": "resources/skills/**/*",
+    "assets": "resources/**/*",
     "outputPath": "dist"
   }
 }

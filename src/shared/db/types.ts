@@ -72,6 +72,7 @@ export interface CreateMessageInput {
   subtype?: string;
   error_message?: string;
   attachments?: string; // JSON string of MessageAttachment[]
+  created_at?: string;
 }
 
 export interface UpdateTaskInput {
@@ -111,4 +112,11 @@ export interface CreateFileInput {
   path: string;
   preview?: string;
   thumbnail?: string;
+}
+
+export interface DatabaseSnapshot {
+  sessions: Session[];
+  tasks: Task[];
+  messages: Message[];
+  files: LibraryFile[];
 }

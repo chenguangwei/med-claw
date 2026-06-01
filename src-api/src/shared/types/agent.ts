@@ -1,3 +1,5 @@
+import type { MemoryConfig } from '@/shared/memory/types';
+
 /**
  * Agent Types
  *
@@ -78,6 +80,7 @@ export interface McpConfigRequest {
 export interface AgentRequest {
   prompt: string;
   sessionId?: string;
+  clientSessionId?: string;
   conversation?: Array<{
     role: 'user' | 'assistant';
     content: string;
@@ -102,4 +105,9 @@ export interface AgentRequest {
   sandboxConfig?: SandboxConfig;
   // Image attachments for vision capabilities
   images?: ImageAttachment[];
+  // Agent memory retrieval/extraction settings and scope
+  memoryConfig?: MemoryConfig;
+  projectPath?: string;
+  channelId?: string;
+  scheduledTaskId?: string;
 }

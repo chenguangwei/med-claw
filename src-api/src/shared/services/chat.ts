@@ -10,7 +10,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 import type { AgentMessage, ConversationMessage } from '@/core/agent/types';
-
+import {
+  buildMemoryAugmentedPrompt,
+  rememberFromConversation,
+  updateShortTermFromConversation,
+} from '@/shared/memory/service';
+import type { MemoryConfig, MemorySource } from '@/shared/memory/types';
 import { createLogger } from '@/shared/utils/logger';
 
 const logger = createLogger('ChatService');
@@ -21,6 +26,14 @@ type AnthropicMessagesCreate = (
   params: Record<string, unknown>
 ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
 
+export interface ChatMemoryRuntimeOptions {
+  memoryConfig?: MemoryConfig;
+  clientSessionId?: string;
+  taskId?: string;
+  projectPath?: string;
+  origin?: MemorySource['origin'];
+}
+
 // Maximum number of conversation messages to include in API calls
 // to prevent excessive token usage. Each "turn" is a user+assistant pair.
 const MAX_CONTEXT_MESSAGES = 40; // 20 turns × 2 messages
@@ -29,7 +42,11 @@ function isAnthropicModel(model: string): boolean {
   return model.startsWith('claude-') || model.includes('claude');
 }
 
-function resolveConfig(modelConfig?: { apiKey?: string; baseUrl?: string; model?: string }) {
+function resolveConfig(modelConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
   // Use explicit modelConfig from user settings only — no environment variable fallback
   const apiKey = modelConfig?.apiKey || '';
   const baseURL = modelConfig?.baseUrl || undefined;
@@ -199,12 +216,16 @@ export async function* runChat(
   modelConfig?: { apiKey?: string; baseUrl?: string; model?: string },
   language?: string,
   conversation?: ConversationMessage[],
-  abortController?: AbortController
+  abortController?: AbortController,
+  memoryOptions?: ChatMemoryRuntimeOptions
 ): AsyncGenerator<AgentMessage> {
   const { apiKey, baseURL, model } = resolveConfig(modelConfig);
 
   if (!apiKey) {
-    yield { type: 'error', message: 'No API key configured. Please set up your API key in Settings.' };
+    yield {
+      type: 'error',
+      message: 'No API key configured. Please set up your API key in Settings.',
+    };
     yield { type: 'done' };
     return;
   }
@@ -219,40 +240,88 @@ export async function* runChat(
 
   const systemPrompt = buildSystemPrompt(
     'You are a helpful assistant. Be concise and direct in your responses. ' +
-    'You have network access capabilities. When users ask about URLs, websites, or online content, ' +
-    'you should attempt to help by analyzing the URL structure, inferring content from the domain/path, ' +
-    'or suggesting the user switch to Agent/Task mode for full web access with tools like curl and browser automation.',
+      'You have network access capabilities. When users ask about URLs, websites, or online content, ' +
+      'you should attempt to help by analyzing the URL structure, inferring content from the domain/path, ' +
+      'or suggesting the user switch to Agent/Task mode for full web access with tools like curl and browser automation.',
     language
   );
+
+  const sessionId = memoryOptions?.clientSessionId || memoryOptions?.taskId;
+  const memoryPrompt = await buildMemoryAugmentedPrompt({
+    prompt,
+    sessionId,
+    taskId: memoryOptions?.taskId,
+    projectPath: memoryOptions?.projectPath,
+    memoryConfig: memoryOptions?.memoryConfig,
+  });
+  const effectivePrompt = memoryPrompt.prompt;
 
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   if (conversation && conversation.length > 0) {
     // Limit conversation history to prevent excessive token usage
-    const trimmedConversation = conversation.length > MAX_CONTEXT_MESSAGES
-      ? conversation.slice(-MAX_CONTEXT_MESSAGES)
-      : conversation;
+    const trimmedConversation =
+      conversation.length > MAX_CONTEXT_MESSAGES
+        ? conversation.slice(-MAX_CONTEXT_MESSAGES)
+        : conversation;
 
     if (trimmedConversation.length < conversation.length) {
-      logger.info(`[ChatService] Truncated conversation history from ${conversation.length} to ${trimmedConversation.length} messages`);
+      logger.info(
+        `[ChatService] Truncated conversation history from ${conversation.length} to ${trimmedConversation.length} messages`
+      );
     }
 
     for (const msg of trimmedConversation) {
       messages.push({ role: msg.role, content: msg.content });
     }
   }
-  messages.push({ role: 'user', content: prompt });
+  messages.push({ role: 'user', content: effectivePrompt });
+
+  let assistantText = '';
+  const remember = async () => {
+    if (!sessionId) return;
+    await updateShortTermFromConversation({
+      sessionId,
+      userMessage: prompt,
+      assistantText,
+      taskId: memoryOptions?.taskId,
+      memoryConfig: memoryOptions?.memoryConfig,
+    });
+    await rememberFromConversation({
+      userMessage: prompt,
+      assistantText,
+      sessionId,
+      taskId: memoryOptions?.taskId,
+      projectPath: memoryOptions?.projectPath,
+      origin: memoryOptions?.origin || 'chat',
+      memoryConfig: memoryOptions?.memoryConfig,
+    });
+  };
 
   // Non-Anthropic models: use OpenAI-compatible API
   if (!isAnthropicModel(model)) {
     try {
-      yield* runOpenAICompatibleChat(messages, systemPrompt, apiKey, baseURL, model, abortController);
+      for await (const message of runOpenAICompatibleChat(
+        messages,
+        systemPrompt,
+        apiKey,
+        baseURL,
+        model,
+        abortController
+      )) {
+        if (message.type === 'text') {
+          assistantText += message.content || '';
+        }
+        yield message;
+      }
+      await remember();
     } catch (error) {
       if (abortController?.signal.aborted) {
         logger.info('[ChatService] Chat aborted by user');
         yield { type: 'done' };
         return;
       }
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       logger.error('[ChatService] OpenAI-compatible chat error:', errorMessage);
       yield { type: 'error', message: errorMessage };
       yield { type: 'done' };
@@ -288,6 +357,7 @@ export async function* runChat(
         event.type === 'content_block_delta' &&
         event.delta.type === 'text_delta'
       ) {
+        assistantText += event.delta.text;
         yield { type: 'text', content: event.delta.text };
       }
     }
@@ -299,6 +369,7 @@ export async function* runChat(
     });
 
     yield { type: 'done' };
+    await remember();
   } catch (error) {
     if (abortController?.signal.aborted) {
       logger.info('[ChatService] Chat aborted by user');
@@ -369,7 +440,10 @@ export async function generateTitle(
         .trim();
     }
 
-    logger.info('[ChatService] Generated title:', { prompt: prompt.slice(0, 50), title });
+    logger.info('[ChatService] Generated title:', {
+      prompt: prompt.slice(0, 50),
+      title,
+    });
     return title || prompt.slice(0, 30);
   } catch (error) {
     logger.error('[ChatService] Title generation failed:', error);

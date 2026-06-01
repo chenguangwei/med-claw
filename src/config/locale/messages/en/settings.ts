@@ -117,6 +117,23 @@ export default {
   maxHistoryTokens: 'Maximum History Tokens',
   maxHistoryTokensDescription:
     'Maximum tokens for conversation history (0 = unlimited)',
+  agentMemory: 'Agent Memory',
+  memoryEnabled: 'Enable Memory',
+  memoryEnabledDescription:
+    'Inject short-term session summaries and approved long-term memories into agent requests',
+  longTermMemoryEnabled: 'Enable Long-term Memory',
+  longTermMemoryEnabledDescription:
+    'Recall durable preferences, decisions, facts, and workflow constraints across sessions',
+  memoryAutoSaveMode: 'Long-term Save Mode',
+  memoryAutoSaveOff: 'Off',
+  memoryAutoSaveExplicit: 'Explicit only',
+  memoryAutoSaveSuggest: 'Require review',
+  maxMemoryContextTokens: 'Memory Context Tokens',
+  maxMemoryContextTokensDescription:
+    'Maximum token budget for memory injected into each request',
+  maxLongTermMemoryItems: 'Long-term Items',
+  maxLongTermMemoryItemsDescription:
+    'Maximum number of long-term memories recalled per request',
 
   // Provider Detection
   detectConfig: 'Test Connection',
@@ -289,7 +306,7 @@ export default {
     'Manage your data: export backups, import data, or clear all data.',
   dataExport: 'Export Data',
   dataExportDescription:
-    'Export all tasks, messages, and settings to a JSON file.',
+    'Export all tasks, messages, settings, and Agent memory to a JSON file.',
   dataExportButton: 'Export',
   dataExporting: 'Exporting...',
   dataImport: 'Import Data',
@@ -305,18 +322,20 @@ export default {
   dataClearConfirmTitle: 'Clear Data',
   dataClearConfirmDescription: 'Choose what data you want to clear:',
   dataClearTasksOnly: 'Clear Tasks Only',
-  dataClearTasksOnlyDescription: 'Delete all tasks and messages, keep settings',
+  dataClearTasksOnlyDescription:
+    'Delete all tasks, messages, and session memory; keep settings',
   dataClearSettingsOnly: 'Clear Settings Only',
   dataClearSettingsOnlyDescription:
     'Reset all settings to defaults, keep tasks',
   dataClearAll: 'Clear All Data',
-  dataClearAllDescription: 'Delete all tasks, messages, and settings',
+  dataClearAllDescription:
+    'Delete all tasks, messages, settings, and Agent memory',
   dataClearTasksConfirm:
-    'Are you sure you want to delete all tasks and messages? This action cannot be undone.',
+    'Are you sure you want to delete all tasks, messages, and session memory? This action cannot be undone.',
   dataClearSettingsConfirm:
     'Are you sure you want to reset all settings to defaults? This action cannot be undone.',
   dataClearAllConfirm:
-    'Are you sure you want to delete ALL data including tasks, messages, and settings? This action cannot be undone.',
+    'Are you sure you want to delete ALL data including tasks, messages, settings, and Agent memory? This action cannot be undone.',
   dataConfirmTitle: 'Confirm',
   dataConfirmClear: 'Yes, Clear',
   dataCancel: 'Cancel',
