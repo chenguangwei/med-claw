@@ -22,6 +22,7 @@ import {
   type Settings as SettingsType,
   type UserProfile,
 } from '@/shared/db/settings';
+import { createCollaborationNavigationState } from '@/shared/lib/collaboration-navigation';
 import {
   getAppDataDir,
   getDirName,
@@ -458,6 +459,21 @@ export function LeftSidebar({
     navigate('/');
   };
 
+  const handleCollaborationSession = () => {
+    setLeftOpen(true);
+    setPanelCategory(null);
+    setSettingsOpen(false);
+
+    if (location.pathname === '/') {
+      dispatchCollaborationSessionStart({ createNew: true });
+      return;
+    }
+
+    navigate('/', {
+      state: createCollaborationNavigationState({ createNew: true }),
+    });
+  };
+
   const handleSelectTask = (taskId: string) => {
     if (taskId === currentTaskId || loadingTaskId) return;
 
@@ -668,6 +684,7 @@ export function LeftSidebar({
               onRenameTask={handleRenameClick}
               onDeleteTask={handleDeleteClick}
               onNewSession={handleNewSession}
+              onCollaborationSession={handleCollaborationSession}
               settings={settings}
               t={t}
             />
@@ -2744,6 +2761,7 @@ function TaskAssistantPanel({
   onRenameTask,
   onDeleteTask,
   onNewSession,
+  onCollaborationSession,
   settings,
   t,
 }: {
@@ -2756,6 +2774,7 @@ function TaskAssistantPanel({
   onRenameTask: (task: Task, e: React.MouseEvent) => void;
   onDeleteTask: (taskId: string, e: React.MouseEvent) => void;
   onNewSession: () => void;
+  onCollaborationSession: () => void;
   settings: SettingsType;
   t: ReturnType<typeof useLanguage>['t'];
 }) {
@@ -3022,7 +3041,7 @@ function TaskAssistantPanel({
     dispatchAssistantSelection(
       createPrimaryAssistantProfile(t.nav.primaryAssistant)
     );
-    dispatchCollaborationSessionStart({ createNew: true });
+    onCollaborationSession();
   };
 
   const startNewSession = () => {

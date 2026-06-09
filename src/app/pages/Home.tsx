@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ASSISTANT_PROFILES_CHANGED_EVENT,
   buildAssistantExecutionScope as buildProfileExecutionScope,
@@ -26,6 +26,7 @@ import {
   subscribeToBackgroundTasks,
   type BackgroundTask,
 } from '@/shared/lib/background-tasks';
+import { readCollaborationNavigationState } from '@/shared/lib/collaboration-navigation';
 import { generateSessionId } from '@/shared/lib/session';
 import { cn } from '@/shared/lib/utils';
 import { useLanguage } from '@/shared/providers/language-provider';
@@ -789,6 +790,11 @@ export function HomePage() {
 
 function HomeContent() {
   const { t } = useLanguage();
+  const location = useLocation();
+  const pendingCollaborationStart = useMemo(
+    () => readCollaborationNavigationState(location.state),
+    [location.state]
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [pendingPrompt, setPendingPrompt] = useState('');
@@ -831,6 +837,7 @@ function HomeContent() {
     useState<CollaborationDraftSession | null>(null);
   const demoMessagesEndRef = useRef<HTMLDivElement>(null);
   const demoRunRef = useRef(0);
+  const consumedCollaborationStartRef = useRef(false);
   const navigate = useNavigate();
 
   const hasDemoConversation = demoMessages.length > 0 || demoRunning;
@@ -1012,6 +1019,21 @@ function HomeContent() {
       resetSalesDemo,
     ]
   );
+
+  useEffect(() => {
+    if (!pendingCollaborationStart) return;
+    if (consumedCollaborationStartRef.current) return;
+
+    consumedCollaborationStartRef.current = true;
+    startCollaborationSession(pendingCollaborationStart);
+    navigate('/', { replace: true, state: null });
+  }, [navigate, pendingCollaborationStart, startCollaborationSession]);
+
+  useEffect(() => {
+    if (!pendingCollaborationStart) {
+      consumedCollaborationStartRef.current = false;
+    }
+  }, [pendingCollaborationStart]);
 
   const selectCollaborationSession = useCallback(
     (sessionId: string) => {
